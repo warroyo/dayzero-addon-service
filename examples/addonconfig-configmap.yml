@@ -15,16 +15,28 @@ data:
     apiVersion: v1
     kind: Namespace
     metadata:
-      name: platform
+      name: team-a
 
-  10-facts.yaml: |
+  10-rbac.yaml: |
     apiVersion: v1
-    kind: ConfigMap
+    kind: ServiceAccount
     metadata:
-      name: cluster-facts
-      namespace: platform
-    data:
-      environment: production
+      name: deployer
+      namespace: team-a
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: deployer
+      namespace: team-a
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: edit
+    subjects:
+    - kind: ServiceAccount
+      name: deployer
+      namespace: team-a
 
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1

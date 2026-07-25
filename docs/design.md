@@ -31,10 +31,14 @@ So a **one-time admin install** of this Supervisor Service permanently delegates
 Addons are built for exactly this job, but essentially every shipped addon drags in
 images, charts, or repositories. This one is pure data.
 
-Resolving the Argo CD chicken-and-egg falls out of that: the addon runs from the
-Supervisor at provisioning time, before the guest cluster is reachable by anything
-external, so it can plant the root `Application` and repo credentials that let Argo
-take over.
+What tenants actually seed is the day-zero state of a cluster: namespaces, service
+accounts, RBAC bindings to SSO groups, resource quotas, default network policies,
+pull secrets. Ordinary configuration that otherwise arrives by handing someone a
+workload-cluster kubeconfig.
+
+Timing is the other half of the value. The addon runs from the Supervisor during
+provisioning, before the cluster is reachable by anything external, so the payload is
+in place before anyone or anything else touches the cluster.
 
 ### Security posture
 

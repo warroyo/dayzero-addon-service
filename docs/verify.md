@@ -157,12 +157,13 @@ ConfigMap still reconciles rather than blocking.
 ## Step 8 — the real test
 
 Create a **brand-new** cluster with the `AddonInstall` label already in place, using
-[`examples/argocd-bootstrap/`](../examples/argocd-bootstrap/) as the payload. Confirm
-Argo CD's root `Application` is present with no manual step, and that it landed early
-enough to be useful.
+[`examples/platform-baseline/`](../examples/platform-baseline/) as the payload.
+Confirm the namespaces, service accounts, RBAC and quotas are present with no manual
+step, and that they landed early enough to be useful — before anyone would have had
+to be handed a kubeconfig.
 
-Seeding an existing cluster proves the mechanism. Only this proves the chicken-and-egg
-is solved rather than moved.
+Seeding an existing cluster proves the mechanism works. Only this proves the tenant
+never needs workload-cluster credentials at all.
 
 ---
 

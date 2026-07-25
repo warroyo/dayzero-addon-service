@@ -8,6 +8,6 @@ metadata:
 spec:
   displayName: Cluster Bootstrap YAML
   description: >-
-    Applies operator-supplied Kubernetes YAML into a VKS cluster at provisioning time,
-    before external GitOps tooling is aware the cluster exists. Carries no Carvel
-    package and no container images.
+    Applies operator-supplied Kubernetes YAML into a VKS cluster at provisioning time:
+    namespaces, service accounts, RBAC, quotas and other day-zero configuration, with
+    no workload cluster kubeconfig. Carries no Carvel package and no container images.

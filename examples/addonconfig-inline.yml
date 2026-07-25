@@ -20,13 +20,26 @@ spec:
       apiVersion: v1
       kind: Namespace
       metadata:
-        name: platform
+        name: team-a
       ---
       apiVersion: v1
-      kind: ConfigMap
+      kind: ServiceAccount
       metadata:
-        name: cluster-facts
-        namespace: platform
-      data:
-        environment: production
-        owner: platform-team
+        name: deployer
+        namespace: team-a
+      ---
+      # Human access granted to an SSO group rather than to individuals. Confirm the
+      # exact subject string for your environment; a wrong one binds silently to nobody.
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: team-a-admins
+        namespace: team-a
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: admin
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: sso:team-a-admins@vsphere.local

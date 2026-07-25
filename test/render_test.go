@@ -241,18 +241,18 @@ func TestNoPayloadStillRenders(t *testing.T) {
 func TestPayloadSources(t *testing.T) {
 	// Deliberately awkward: leading comment, deep indentation and a blank line, the
 	// kind of payload that breaks naive indent-based embedding.
-	rawYAML := `# platform bootstrap
+	rawYAML := `# platform baseline
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: argocd
+  name: team-a
 
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: repo-creds
-  namespace: argocd
+  name: registry-pull
+  namespace: team-a
 stringData:
   password: "s3cr3t: with colons"
 `
@@ -269,7 +269,7 @@ stringData:
 	configMap := map[string]any{
 		"bootstrapConfigMap": map[string]any{
 			"data": map[string]any{
-				"app-of-apps.yaml": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: root\n",
+				"rbac.yaml": "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: deployer\n  namespace: team-a\n",
 			},
 		},
 	}
@@ -296,8 +296,8 @@ stringData:
 		{
 			name:      "configmap only",
 			deps:      configMap,
-			wantPath:  "app-of-apps.yaml",
-			wantInner: "kind: Application",
+			wantPath:  "rbac.yaml",
+			wantInner: "kind: RoleBinding",
 		},
 	}
 
@@ -341,7 +341,7 @@ stringData:
 
 		paths := appPaths(t, a, values, configMap)
 
-		for _, want := range []string{"10-inline.yml", "20-structured-000.yml", "app-of-apps.yaml"} {
+		for _, want := range []string{"10-inline.yml", "20-structured-000.yml", "rbac.yaml"} {
 			if _, found := paths[want]; !found {
 				t.Errorf("missing inline path %q; got %v", want, keys(paths))
 			}

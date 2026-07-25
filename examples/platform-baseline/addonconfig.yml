@@ -1,0 +1,119 @@
+# A typical baseline for a freshly provisioned cluster: the namespaces, identities and
+# guardrails that need to exist before anyone uses it.
+#
+# None of this is exotic, which is the point. It is the set of things every cluster
+# needs on day zero and that otherwise arrive by someone running kubectl against a
+# kubeconfig they had to be given.
+#
+# Replace my-cluster / my-namespace and adjust to taste.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+  annotations:
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  values:
+    resources:
+
+    # --- namespaces ------------------------------------------------------------
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: team-a
+        labels:
+          team: team-a
+
+    # --- an identity for CI to deploy with --------------------------------------
+    - apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: deployer
+        namespace: team-a
+
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: deployer
+        namespace: team-a
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: edit
+      subjects:
+      - kind: ServiceAccount
+        name: deployer
+        namespace: team-a
+
+    # --- human access, granted to an SSO group rather than individuals -----------
+    # Confirm the exact subject string for your environment; on a Supervisor it looks
+    # like "sso:<group>@<domain>".
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: team-a-admins
+        namespace: team-a
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: admin
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: sso:team-a-admins@vsphere.local
+
+    # --- read-only view across the whole cluster for the platform team -----------
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: platform-view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: sso:platform@vsphere.local
+
+    # --- guardrails --------------------------------------------------------------
+    - apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: team-a
+        namespace: team-a
+      spec:
+        hard:
+          requests.cpu: "8"
+          requests.memory: 16Gi
+          persistentvolumeclaims: "10"
+
+    - apiVersion: v1
+      kind: LimitRange
+      metadata:
+        name: defaults
+        namespace: team-a
+      spec:
+        limits:
+        - type: Container
+          default:
+            cpu: 500m
+            memory: 512Mi
+          defaultRequest:
+            cpu: 100m
+            memory: 128Mi
+
+    # Deny-by-default ingress, so namespaces are isolated unless something opts in.
+    - apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: default-deny-ingress
+        namespace: team-a
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress

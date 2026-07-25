@@ -31,13 +31,13 @@ spec:
   displayName: Cluster Bootstrap YAML
   shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
   longDescription: Registers a VKS addon that applies operator-supplied Kubernetes
-    YAML into a workload cluster as it is provisioned, before external GitOps tooling
-    is aware the cluster exists. Tenants attach it with an AddonInstall and supply
-    the payload through an AddonConfig, with no workload cluster kubeconfig, no Helm
-    chart, no package repository and no container images.
+    YAML into a workload cluster as it is provisioned - namespaces, service accounts,
+    RBAC, resource quotas and other day-zero configuration. Tenants attach it with an
+    AddonInstall and supply the payload through an AddonConfig, with no workload
+    cluster kubeconfig, no Helm chart, no package repository and no container images.
   categories:
-  - CI/CD
-  - GitOps
+  - Configuration
+  - Security
 
 ---
 apiVersion: packaging.carvel.dev/v1alpha1

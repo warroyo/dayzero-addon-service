@@ -20,10 +20,15 @@ So a **one-time admin install** of this service permanently delegates "seed my
 workload cluster with arbitrary YAML" to tenants, with no workload-cluster
 kubeconfig, no registry, no chart, and no repo.
 
-Falling out of that: it kills the GitOps chicken-and-egg. The addon runs from the
-Supervisor *before* the guest cluster is reachable by anything external, so it can
-plant the Argo CD root `Application` and repo credentials that let Argo take over
-from there. See [`examples/argocd-bootstrap/`](examples/argocd-bootstrap/).
+In practice that means the day-zero state a cluster needs before anyone uses it —
+namespaces, service accounts, RBAC bindings to SSO groups, resource quotas, default
+network policies, pull secrets. Resources that otherwise arrive by handing someone a
+workload-cluster kubeconfig and having them run `kubectl`. See
+[`examples/platform-baseline/`](examples/platform-baseline/).
+
+Because the addon runs from the Supervisor during provisioning, the payload is in
+place before anything else reaches the cluster, which also makes it a reasonable place
+to plant whatever a later tool needs to take over.
 
 Addons are built for this job, but essentially every shipped addon drags in images,
 charts, or repositories. This one is pure data — which is legal because
