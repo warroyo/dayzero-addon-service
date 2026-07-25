@@ -1,0 +1,165 @@
+#@ load("@ytt:data", "data")
+#@ acd_name = "{}.kubernetes.vmware.com.{}".format(data.values.addon_name, data.values.addon_version)
+
+#! The guest-cluster namespace, service account and ClusterRoleBinding names are
+#! deliberately hardcoded to "vks-bootstrap". They are not a meaningful operator
+#! knob, and keeping them literal avoids interleaving ytt substitution with the Go
+#! templates below, which are evaluated later by the addon controller.
+#!
+#! Everything inside a `template:` block is Go template + sprig, evaluated per
+#! cluster by the addon controller. Context roots available there:
+#!   .Values.<field>          - this AddonConfigDefinition's schema, from AddonConfig.spec.values
+#!   .Dependencies.<inputName> - a resolved templateInputResource
+#!   .Cluster.name / .Addon.name
+#! A `template:` body is the resource body ONLY: apiVersion, kind, metadata.name and
+#! metadata.namespace come from targetClusterOutput and must not appear here.
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfigDefinition
+metadata:
+  name: #@ acd_name
+  namespace: #@ data.values.addon_namespace
+spec:
+  #! Lets the addon controller read the tenant's optional payload ConfigMap out of
+  #! the cluster's own Supervisor namespace. This grants rights on the Supervisor,
+  #! not in the guest cluster.
+  addonInstallPermission:
+    accessPolicies:
+    - order: 0
+      rules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["get", "list", "watch"]
+
+  schema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        resources:
+          type: array
+          description: >-
+            Kubernetes resources to apply into the cluster, as structured YAML. Each
+            item is one complete resource. Use this when the payload is authored
+            alongside the AddonConfig.
+          items:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        resourcesYaml:
+          type: string
+          description: >-
+            Kubernetes resources to apply into the cluster, as a single raw
+            multi-document YAML string. Use this for pasting existing manifests
+            verbatim.
+        clusterRoleName:
+          type: string
+          default: cluster-admin
+          description: >-
+            ClusterRole the payload is applied with. cluster-admin matches what the
+            tenant already holds over their own workload cluster. Narrow it if the
+            Supervisor namespace contains users who should not have that.
+        syncPeriod:
+          type: string
+          default: 10m
+          description: How often kapp-controller re-reconciles the payload.
+        noopDelete:
+          type: boolean
+          default: false
+          description: >-
+            When true, removing the addon leaves the payload resources in place
+            instead of deleting them.
+
+  templateInputResources:
+  #! Optional by design: the inline paths above must still render when no ConfigMap
+  #! exists. The name is fixed by convention rather than taken from .Values, because
+  #! templating an input resource name is only documented against .Dependencies and
+  #! .Cluster - .Values is unproven there.
+  - inputName: bootstrapConfigMap
+    apiVersion: v1
+    kind: ConfigMap
+    name: '{{.Cluster.name}}-bootstrap'
+    scope: Namespace
+    constraints:
+    - operator: optional
+
+  templateOutputResources:
+  #! 1 - namespace holding the App and its identity.
+  - targetClusterOutput:
+      apiVersion: v1
+      kind: Namespace
+      name: vks-bootstrap
+      scope: Cluster
+    template: |
+      spec: {}
+
+  #! 2 - identity kapp-controller applies the payload with.
+  - targetClusterOutput:
+      apiVersion: v1
+      kind: ServiceAccount
+      name: vks-bootstrap
+      namespace: vks-bootstrap
+      scope: Namespace
+    template: |
+      automountServiceAccountToken: true
+
+  #! 3 - grants that identity its permissions. Body shape (top-level roleRef and
+  #! subjects, no spec) matches the shipped vks-static ClusterRoleBinding output.
+  - targetClusterOutput:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      name: vks-bootstrap
+      scope: Cluster
+    template: |
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: {{ .Values.clusterRoleName }}
+      subjects:
+      - kind: ServiceAccount
+        name: vks-bootstrap
+        namespace: vks-bootstrap
+
+  #! 4 - the App that actually applies the payload.
+  #!
+  #! An output's GVK is a static literal, so arbitrary payload kinds cannot be
+  #! emitted natively. Relaying through a kapp-controller App with an inline fetch
+  #! lifts that limit and adds pruning, GC, retry and a real status object. inline
+  #! carries content in the CR itself, so no OCI artifact is involved.
+  #!
+  #! Payload values are JSON-encoded rather than indented in. A JSON string is a
+  #! valid YAML scalar, so arbitrary multi-line YAML embeds with no indentation
+  #! arithmetic and no sensitivity to odd whitespace in the payload.
+  - targetClusterOutput:
+      apiVersion: kappctrl.k14s.io/v1alpha1
+      kind: App
+      name: vks-bootstrap
+      namespace: vks-bootstrap
+      scope: Namespace
+    template: |
+      spec:
+        serviceAccountName: vks-bootstrap
+        syncPeriod: {{ .Values.syncPeriod }}
+        noopDelete: {{ .Values.noopDelete }}
+        fetch:
+        - inline:
+            paths:
+              00-placeholder.yml: "#! no payload supplied\n"
+              {{- if .Values.resourcesYaml }}
+              10-inline.yml: {{ .Values.resourcesYaml | toJson }}
+              {{- end }}
+              {{- range $i, $r := .Values.resources }}
+              {{ printf "20-structured-%03d.yml" $i }}: {{ $r | toYaml | toJson }}
+              {{- end }}
+              {{- if .Dependencies }}
+              {{- if .Dependencies.bootstrapConfigMap }}
+              {{- range $k, $v := .Dependencies.bootstrapConfigMap.data }}
+              {{ $k | toJson }}: {{ $v | toJson }}
+              {{- end }}
+              {{- end }}
+              {{- end }}
+        template:
+        # Required field. ytt here is a passthrough that tolerates plain "#"
+        # comments in tenant-authored YAML.
+        - ytt:
+            ignoreUnknownComments: true
+        deploy:
+        - kapp: {}

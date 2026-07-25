@@ -1,0 +1,32 @@
+# Payload as a raw multi-document YAML string. Best for pasting manifests you already
+# have. Everything under resourcesYaml is applied verbatim into the workload cluster.
+#
+# The name MUST be "<cluster-name>-<addon-name>" and the object MUST live in the
+# cluster's own Supervisor namespace.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+  annotations:
+    # Without this the AddonConfig survives deletion of the ClusterAddon.
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  values:
+    resourcesYaml: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: platform
+      ---
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: cluster-facts
+        namespace: platform
+      data:
+        environment: production
+        owner: platform-team

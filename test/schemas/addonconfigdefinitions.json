@@ -1,0 +1,375 @@
+{
+  "description": "AddonConfigDefinition is the Schema for the addonconfigdefinitions API.\nIt defines how addon configurations should be processed, including input resource\ndiscovery, template processing, output resource creation, and required permissions.\n\nThis resource is used by addon management systems to define reusable configuration\ntemplates that can be applied across multiple clusters or namespaces.",
+  "properties": {
+    "apiVersion": {
+      "description": "APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "spec": {
+      "description": "spec defines the desired state of AddonConfigDefinition.",
+      "properties": {
+        "addonInstallPermission": {
+          "description": "addonInstallPermission describes the required privileges to install the addon",
+          "properties": {
+            "accessPolicies": {
+              "description": "accessPolicies defines an array of access policies.",
+              "items": {
+                "description": "AccessPolicy defines the resource access rules on the target namespace.\nIf the target namespace is not specified, the rules apply to the namespace of the consuming Cluster.",
+                "properties": {
+                  "order": {
+                    "description": "order is the order of the policy. Defining order can help to maintain the policies\nespecially when handling upgrade.",
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "rules": {
+                    "description": "rules specifies the privileges that need to be granted to the service account.",
+                    "items": {
+                      "description": "PolicyRule holds information that describes a policy rule, but does not contain information\nabout who the rule applies to or which namespace the rule applies to.",
+                      "properties": {
+                        "apiGroups": {
+                          "description": "APIGroups is the name of the APIGroup that contains the resources.  If multiple API groups are specified, any action requested against one of\nthe enumerated resources in any API group will be allowed. \"\" represents the core API group and \"*\" represents all API groups.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "nonResourceURLs": {
+                          "description": "NonResourceURLs is a set of partial urls that a user should have access to.  *s are allowed, but only as the full, final step in the path\nSince non-resource URLs are not namespaced, this field is only applicable for ClusterRoles referenced from a ClusterRoleBinding.\nRules can either apply to API resources (such as \"pods\" or \"secrets\") or non-resource URL paths (such as \"/api\"),  but not both.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "resourceNames": {
+                          "description": "ResourceNames is an optional white list of names that the rule applies to.  An empty set means that everything is allowed.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "resources": {
+                          "description": "Resources is a list of resources this rule applies to. '*' represents all resources.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "verbs": {
+                          "description": "Verbs is a list of Verbs that apply to ALL the ResourceKinds contained in this rule. '*' represents all verbs.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "verbs"
+                      ],
+                      "type": "object",
+                      "additionalProperties": false
+                    },
+                    "maxItems": 32,
+                    "type": "array"
+                  },
+                  "targetNamespace": {
+                    "description": "targetNamespace is the namespace to create the Role and RoleBinding based on the Rules.\nIf not specified, the rules apply to the namespace of the consuming Cluster.",
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "order"
+                ],
+                "type": "object",
+                "additionalProperties": false
+              },
+              "maxItems": 32,
+              "type": "array"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false
+        },
+        "schema": {
+          "description": "schema describes the OpenAPI v3 schema used for validation, pruning, and defaulting\nof this version of the custom resource. This follows the same structure as\nCustomResourceDefinition schemas.",
+          "type": "object"
+        },
+        "templateInputResources": {
+          "description": "templateInputResources describes how to discover and reference resources that will\nbe used as input during template processing. These resources provide the data\ncontext for rendering the addon configuration templates.",
+          "items": {
+            "description": "TemplateInputResource defines a named dependency resource that will be used during\ntemplate processing. This resource will be fetched and made available to the\ntemplate engine under the specified input name.",
+            "properties": {
+              "apiVersion": {
+                "description": "apiVersion of the target referent resource.\nMust be a valid Kubernetes API version (e.g., \"v1\", \"apps/v1\").",
+                "maxLength": 317,
+                "minLength": 1,
+                "type": "string"
+              },
+              "constraints": {
+                "description": "constraints used to specify additional requirements for the target resource.\nThese constraints are evaluated during resource discovery to ensure the\nreferenced resource meets specific criteria before being used in templating.\nSupported constraint operators:\n- \"unique\" (omitting constraints): Requires exactly one matching resource. If the dependency is not available, reconciliation stops. This is the implicit behavior when no optional or multiple constraint is set; it is not specified as a constraint entry.\n- \"optional\": Allows dependency resolution to continue when target is not found\n- \"multiple\": Allows matching multiple resources, storing them as an array in template context",
+                "items": {
+                  "description": "DependencyConstraint defines a constraint that must be satisfied by a dependency resource.",
+                  "properties": {
+                    "operator": {
+                      "description": "operator specifies the constraint operator for this dependency input.\nValid values are \"unique\", \"optional\", and \"multiple\".\n\n- \"unique\": Requires exactly one matching resource; if the dependency is not available, reconciliation stops.\n  Equivalent to omitting constraints; explicit \"unique\" is optional and documents intent.\n- \"optional\": Allows dependency resolution to continue when the dependency resource is not found\n  (e.g. when the source differs by infrastructure topology: VDS, NSX-T, VPC, etc.).\n- \"multiple\": Allows multiple matches; results are stored as an array in the template context,\n  typically with a label selector to select all matching resources.",
+                      "enum": [
+                        "optional",
+                        "multiple",
+                        "unique"
+                      ],
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "operator"
+                  ],
+                  "type": "object",
+                  "additionalProperties": false
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "inputName": {
+                "description": "inputName defines the top-level name used when providing the referent for\ntemplating. This name will be used as the key to access the resource data\nwithin the template processing context.",
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "description": "kind of the target referent resource.\nMust be a valid Kubernetes resource kind (e.g., \"ConfigMap\", \"Secret\", \"Deployment\").",
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              "name": {
+                "description": "name of the target referent resource.\nMutually exclusive with the selector field. When specified, this value\nwill be used for discovery.\n\nThe value may be a literal name or a Go template expression that\nreferences data from previously resolved TemplateInputResources via\n.Dependencies.<inputName> (dot-access) or\nindex .Dependencies \"<inputName>\" (index-access, required for names\ncontaining hyphens). For example:\n\n  templateInputResources:\n    - inputName: myConfigMap\n      apiVersion: v1\n      kind: ConfigMap\n      name: my-config          # resolved first (literal name)\n    - inputName: mySecret\n      apiVersion: v1\n      kind: Secret\n      name: \"{{.Dependencies.myConfigMap.metadata.name}}-secret\"\n\nWhen cross-references are present, TemplateInputResources are\nautomatically ordered by a topological sort so that each dependency is\nfully resolved before it is referenced. A circular dependency (including\na self-reference) is rejected at admission time.",
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "description": "namespace of the target referent resource.\nIf the scope is Cluster, the namespace is ignored.\nIf the scope is Namespace, and if the namespace is not specified,\nthe resource will be looked up in the same namespace\nas the Cluster.",
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scope": {
+                "default": "Namespace",
+                "description": "scope indicates whether the target resource is namespaced or cluster-scoped.\nWhen set to \"Cluster\", the resource will be looked up at cluster scope regardless of namespace.\nWhen set to \"Namespace\" (default), the resource will be looked up in the specified namespace.",
+                "enum": [
+                  "Namespace",
+                  "Cluster"
+                ],
+                "type": "string"
+              },
+              "selector": {
+                "description": "selector used to identify the referent resource using label selectors.\nMust identify exactly one resource to avoid ambiguity during template processing.\nMutually exclusive with the explicit name field.\n\nThe matchLabels values and matchExpressions values may contain Go template\nexpressions that reference data from previously resolved\nTemplateInputResources via .Dependencies.<inputName> or\nindex .Dependencies \"<inputName>\", identical to the name field.\nSuch cross-references are included in the topological sort, so circular\ndependencies in selector values are also rejected at admission time.\nFor example:\n\n  selector:\n    matchLabels:\n      tier: \"{{.Dependencies.appConfig.data.tier}}\"\n    matchExpressions:\n      - key: zone\n        operator: In\n        values:\n          - '{{index .Dependencies \"infra-config\" \"data\" \"zone\"}}'",
+                "properties": {
+                  "matchExpressions": {
+                    "description": "matchExpressions is a list of label selector requirements. The requirements are ANDed.",
+                    "items": {
+                      "description": "A label selector requirement is a selector that contains values, a key, and an operator that\nrelates the key and values.",
+                      "properties": {
+                        "key": {
+                          "description": "key is the label key that the selector applies to.",
+                          "type": "string"
+                        },
+                        "operator": {
+                          "description": "operator represents a key's relationship to a set of values.\nValid operators are In, NotIn, Exists and DoesNotExist.",
+                          "type": "string"
+                        },
+                        "values": {
+                          "description": "values is an array of string values. If the operator is In or NotIn,\nthe values array must be non-empty. If the operator is Exists or DoesNotExist,\nthe values array must be empty. This array is replaced during a strategic\nmerge patch.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "operator"
+                      ],
+                      "type": "object",
+                      "additionalProperties": false
+                    },
+                    "type": "array"
+                  },
+                  "matchLabels": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels\nmap is equivalent to an element of matchExpressions, whose key field is \"key\", the\noperator is \"In\", and the values array contains only \"value\". The requirements are ANDed.",
+                    "type": "object"
+                  }
+                },
+                "type": "object",
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "apiVersion",
+              "inputName",
+              "kind"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "templateOutputResources": {
+          "description": "templateOutputResources describes where and how to save the rendered template output.\nAt least one output resource must be specified to define where the processed\naddon configuration should be stored.",
+          "items": {
+            "description": "TemplateOutputResource defines where and how to persist the rendered template output.\nThe output can be stored either in the supervisor cluster or in the target workload cluster.",
+            "properties": {
+              "renderForEach": {
+                "description": "renderForEach enables variadic output generation by referencing an\ninput resource with the \"multiple\" constraint. When set, this output resource\nwill be instantiated once for each item in the referenced input array.\nA single renderForEach input produces at most 64 output instances.",
+                "properties": {
+                  "inputName": {
+                    "description": "inputName references a TemplateInputResource.inputName with the \"multiple\" constraint.",
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "inputName"
+                ],
+                "type": "object",
+                "additionalProperties": false
+              },
+              "supervisorNamespaceOutput": {
+                "description": "supervisorNamespaceOutput specifies that the rendered configuration should be\npersisted as a resource within the supervisor cluster namespace.",
+                "properties": {
+                  "apiVersion": {
+                    "description": "apiVersion of the output resource.\nMust be a valid Kubernetes API version (e.g., \"v1\", \"apps/v1\").",
+                    "maxLength": 317,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "description": "kind of the output resource.\nMust be a valid Kubernetes resource kind (e.g., \"ConfigMap\", \"Secret\").",
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "name of the output resource.",
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "referenceType": {
+                    "default": "Direct",
+                    "description": "referenceType specifies how this output is consumed by the addon system.\nWhen set to \"ValuesRef\", the configuration values will be consumed through\nPackageInstalls. When set to \"Direct\", the configuration\nis applied directly to the supervisor cluster as a standalone resource.\nif the kind is not a secret, then the referenceType will be ignored.",
+                    "enum": [
+                      "ValuesRef",
+                      "Direct"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiVersion",
+                  "kind",
+                  "name"
+                ],
+                "type": "object",
+                "additionalProperties": false
+              },
+              "targetClusterOutput": {
+                "description": "targetClusterOutput specifies that the rendered configuration should be\npersisted as a resource within the target workload cluster.",
+                "properties": {
+                  "apiVersion": {
+                    "description": "apiVersion of the output resource.\nMust be a valid Kubernetes API version (e.g., \"v1\", \"apps/v1\").",
+                    "maxLength": 317,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "description": "kind of the output resource.\nMust be a valid Kubernetes resource kind (e.g., \"ConfigMap\", \"Secret\").",
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "name of the output resource.",
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "description": "namespace of the output resource.\nIf it is a cluster-scoped resource, the empty Namespace is allowed, otherwise Namespace must have value.",
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "referenceType": {
+                    "default": "ValuesRef",
+                    "description": "referenceType specifies how this output is consumed by the addon system.\nWhen set to \"ValuesRef\", the configuration values will be consumed through\nPackageInstalls. When set to \"Direct\", the configuration\nis applied directly to the target cluster as a standalone resource.\nif the kind is not a secret, then the referenceType will be ignored.",
+                    "enum": [
+                      "ValuesRef",
+                      "Direct"
+                    ],
+                    "type": "string"
+                  },
+                  "scope": {
+                    "default": "Namespace",
+                    "description": "scope indicates whether the scope of the output resource.\nIf it is a cluster-scoped resource, the empty Namespace is allowed, otherwise Namespace must have value.",
+                    "enum": [
+                      "Namespace",
+                      "Cluster"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiVersion",
+                  "kind",
+                  "name"
+                ],
+                "type": "object",
+                "additionalProperties": false
+              },
+              "template": {
+                "description": "template defines the Kubernetes resource template for output manifest generation.\nThis field only needs the resource specification (excluding TypeMeta and ObjectMeta)\nas the GVK, Name, and Namespace are already handled in the SupervisorNamespaceOutput\nor TargetClusterOutput  structure.\nThe template supports CEL expressions that can be populated with values from:\n- AddonConfig.values: Configuration values from the addon\n- TemplateInputResource: metadata from input sources\nExample CEL expressions: ${values.arguments.paused}, ${cluster.Name}",
+                "maxLength": 32768,
+                "type": "string"
+              }
+            },
+            "required": [
+              "template"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "templateOutputResources"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "spec"
+  ],
+  "type": "object",
+  "additionalProperties": false
+}

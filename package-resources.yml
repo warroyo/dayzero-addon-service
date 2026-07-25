@@ -1,0 +1,59 @@
+apiVersion: data.packaging.carvel.dev/v1alpha1
+kind: Package
+metadata:
+  creationTimestamp: null
+  name: bootstrap-addon.fling.vsphere.vmware.com.0.0.0
+spec:
+  refName: bootstrap-addon.fling.vsphere.vmware.com
+  releasedAt: null
+  template:
+    spec:
+      deploy:
+      - kapp: {}
+      fetch:
+      - git: {}
+      template:
+      - ytt:
+          paths:
+          - config
+      - kbld: {}
+  valuesSchema:
+    openAPIv3: null
+  version: 0.0.0
+
+---
+apiVersion: data.packaging.carvel.dev/v1alpha1
+kind: PackageMetadata
+metadata:
+  creationTimestamp: null
+  name: bootstrap-addon.fling.vsphere.vmware.com
+spec:
+  displayName: Cluster Bootstrap YAML
+  shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
+  longDescription: Registers a VKS addon that applies operator-supplied Kubernetes
+    YAML into a workload cluster as it is provisioned, before external GitOps tooling
+    is aware the cluster exists. Tenants attach it with an AddonInstall and supply
+    the payload through an AddonConfig, with no workload cluster kubeconfig, no Helm
+    chart, no package repository and no container images.
+  categories:
+  - CI/CD
+  - GitOps
+
+---
+apiVersion: packaging.carvel.dev/v1alpha1
+kind: PackageInstall
+metadata:
+  annotations:
+    kctrl.carvel.dev/local-fetch-0: .
+  creationTimestamp: null
+  name: bootstrap-addon
+spec:
+  packageRef:
+    refName: bootstrap-addon.fling.vsphere.vmware.com
+    versionSelection:
+      constraints: 0.0.0
+  serviceAccountName: bootstrap-addon-sa
+status:
+  conditions: null
+  friendlyDescription: ""
+  observedGeneration: 0

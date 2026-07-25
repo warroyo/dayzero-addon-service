@@ -1,0 +1,43 @@
+# Payload held in a ConfigMap rather than in the AddonConfig itself. Use this when the
+# payload is large (an AddonConfig is still an etcd object, so ~1MB is the ceiling) or
+# when the payload is managed by a different pipeline from the AddonConfig.
+#
+# The ConfigMap name is fixed by convention: "<cluster-name>-bootstrap", in the
+# cluster's Supervisor namespace. Every key becomes a file applied to the cluster.
+# The lookup is optional, so an AddonConfig with no matching ConfigMap still works.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+data:
+  00-namespace.yaml: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: platform
+
+  10-facts.yaml: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: cluster-facts
+      namespace: platform
+    data:
+      environment: production
+
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+  annotations:
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  # No values needed. The ConfigMap above is discovered by name convention, and the
+  # three payload sources compose: anything set here is applied alongside it.
+  values: {}

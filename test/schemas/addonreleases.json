@@ -1,0 +1,188 @@
+{
+  "description": "AddonRelease is the Schema for the AddonRelease API.\n\nUpgrade Workflow Summary:\n\n1. Determine if upgrade is required:\nIf the currently installed AddonRelease is incompatible with the\nTARGET cluster Kubernetes version, upgrade is required.\n\n2. Determine WHEN to upgrade:\n\nCompare the following constraints against the target cluster:\n  - kubernetesVersionConstraints vs TARGET control-plane version\n  - workerVersionConstraints     vs TARGET worker version\n\nIdentify the earliest stage during upgrade when the target AddonRelease\nbecomes compatible:\n\n  - If incompatibility is detected in the first upgrade path of a\n    multi-step cluster upgrade, the AddonRelease is upgraded in the\n    BeforeClusterUpgrade (BCU) stage.\n  - If incompatibility is detected in a later upgrade path, the\n    AddonRelease is upgraded in that path’s BeforeControlPlaneUpgrade (BCPU) stage.\n  - If incompatible with the target worker version during upgrade,\n    the AddonRelease is upgraded before worker upgrades.\n\nNote: BeforeClusterUpgrade occurs only once per multi-step upgrade.\n\n3. If no constraints are specified, upgrade occurs AfterClusterUpgrade.\n\nConstraint Driven Upgrade Strategy Examples:\n\nExample 1 — Addon has compatibility requirements with control plane:\n\n\tkubernetesVersionConstraints defined per AddonRelease version:\n\t  - v1.35 AddonRelease:\n\t    kubernetesVersionConstraints: \">=1.35.0 <1.36.0\"\n\t  - v1.36 AddonRelease:\n\t    kubernetesVersionConstraints: \">=1.36.0 <1.37.0\"\n\t  - v1.37 AddonRelease:\n\t    kubernetesVersionConstraints: \">=1.37.0\"\n\nDuring cluster upgrade from 1.34 to 1.35, the addon is upgraded before\ncontrol plane is upgraded to 1.35, in the BeforeClusterUpgrade (BCU) stage.\n\nDuring cluster upgrade from 1.34 to 1.37, the addon is upgraded in sequence\nto 1.35 before control plane is upgraded to 1.35 in the BCU stage, then to\n1.36 before control plane is upgraded to 1.36 in the BCPU stage, then to 1.37\nbefore control plane is upgraded to 1.37 in the BCPU stage.\n\nExample 2 — Addon has compatibility requirement with kubelet (i.e. worker node version):\n\n\tworkerVersionConstraints: \">=1.37.0\"\n\nThis AddonRelease requires worker version 1.37 or higher (e.g. addon supports\nonly N+2 kubelet). The addon is upgraded when the target worker version\nreaches 1.37.\n\nExample 3 — Addon has compatibility requirements with both the control plane and worker nodes:\n\n\tkubernetesVersionConstraints: \">=1.36.0\"\n\tworkerVersionConstraints: \">=1.36.0\"\n\nAddon is upgraded at the first step where both target control plane and target\nworker version satisfy the constraints when upgrading to 1.36.\n\nExample 4 —  Addon has no constraints specified (both fields nil):\n\nAddon is treated as forward-compatible. Upgrade occurs only after the cluster\nupgrade fully completes.",
+  "properties": {
+    "apiVersion": {
+      "description": "APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "spec": {
+      "description": "spec is the desired state of AddonRelease.",
+      "properties": {
+        "addonConfigDefinitionRef": {
+          "description": "addonConfigDefinitionRef is the reference of the AddonConfigDefinition\nto be used for this AddonRelease.\n\nIf this field is unset, an AddonInstall for this AddonRelease will not be able\nto supply an AddonConfig, and no output resources will be rendered.\n\nAn AddonRelease should have package and/or definitionRef set.",
+          "properties": {
+            "name": {
+              "description": "name of the AddonConfigDefinition being referenced.",
+              "maxLength": 253,
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "description": "namespace of the AddonConfigDefinition being referenced.",
+              "maxLength": 63,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "namespace"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "addonRef": {
+          "description": "addonRef references the addon.\nThis is used to group different AddonReleases for the same addon.",
+          "properties": {
+            "name": {
+              "description": "name of the addon being referenced",
+              "maxLength": 253,
+              "minLength": 1,
+              "type": "string"
+            },
+            "namespace": {
+              "description": "namespace of the addon being referenced\n\nIf not specified, will use the default public namespace defined by the addon manager.",
+              "maxLength": 63,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "dependsOn": {
+          "description": "dependsOn specifies a list of other addons that this AddonRelease depends on.\nAddonRelease install will check if all addons in DependsOn are installed\non the Kubernetes cluster before installing.\n\nExample: contour depends on cert-manager:\n\ndependsOn:\n- addonRef:\n    name: cert-manager",
+          "items": {
+            "description": "DependsOnAddon declares a dependency on another addon; this AddonRelease depends on\nand must be deployed on the workload cluster.",
+            "properties": {
+              "addonRef": {
+                "description": "addonRef contains the reference for the addon.",
+                "properties": {
+                  "name": {
+                    "description": "name of the addon being referenced",
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "description": "namespace of the addon being referenced\n\nIf not specified, will use the default public namespace defined by the addon manager.",
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object",
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "addonRef"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "destinationVersionConstraints": {
+          "description": "destinationVersionConstraints specifies the destination versions of AddonRelease to which this\nAddonRelease can be upgraded from.\n\nIf the addon is not already installed, destinationVersionConstraints will\nbe ignored. destinationVersionConstraints is used from the source addonRelease (already installed).\nDuring addon upgrades, destinationVersionConstraints will be used to determine if the\nupgrade is supported.\ndestinationVersionConstraints is used from the source addonRelease (already installed).\n\nExample 1: Upgrade from the new v1.30.3 AddonRelease, only if the destination version is 1.31.3 or higher.\n\ndestinationVersionConstraints: '>=1.31.3'",
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "kubernetesVersionConstraints": {
+          "description": "kubernetesVersionConstraints defines the Kubernetes versions for which this\nAddonRelease is compatible.\nDuring cluster upgrades, this is used to determine compatibility with the target\nKubernetes versions.\n\nIf the cluster's current Kubernetes version doesn't meet the constraints, then this AddonRelease\nwill not be deployed on the cluster.\n\nDuring cluster upgrades, kubernetesVersionConstraints will be run against the target Kubernetes versions\nto determine if the AddonRelease will remain compatible.\nIf the installed AddonRelease would become incompatible with the target\nKubernetes version, the addon will be upgraded before the control plane.\nTogether with workerVersionConstraints, this determines the earliest\nsafe upgrade point in the overall cluster upgrade workflow.\nIf both kubernetesVersionConstraints and workerVersionConstraints are nil,\nthe addon would be upgraded after the cluster upgrade completes, if there are newer compatible versions.\n\nSee the AddonRelease type documentation for the complete upgrade workflow.\n\nExample 1: Deploy this AddonRelease if k8s version is greater than 1.29:\nkubernetesVersionConstraints: '>=1.29.0'\nThis means deploy when target is at 1.29.0 or higher before the control plane is upgraded\n\nExample 2: Deploy this AddonRelease if k8s version is on 1.31.x\nkubernetesVersionConstraints: '>=1.31.0 <1.32.0'\nNote, in this example, the AddonRelease will need to be upgraded as part\nof cluster upgrade to 1.32 before the control plane is upgraded.",
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "package": {
+          "description": "package specifies the ref name and version.\n\nIf this field is unset, no package will be deployed for this AddonRelease.\n\nAn AddonRelease should have package and/or definitionRef set.",
+          "properties": {
+            "refName": {
+              "description": "refName specifies the name of the package corresponding to this release",
+              "maxLength": 253,
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "description": "version specifies version of the package corresponding to this release",
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "refName",
+            "version"
+          ],
+          "type": "object",
+          "additionalProperties": false
+        },
+        "sourceVersionConstraints": {
+          "description": "sourceVersionConstraints specifies the source versions of AddonRelease from which this\nAddonRelease can be upgraded to.\n\nIf the addon is not already installed, sourceVersionConstraints will\nbe ignored.\nDuring addon upgrades, sourceVersionConstraints will be used to determine if the\nupgrade is supported.\nsourceVersionConstraints is used from the target addonRelease (to be upgraded).\n\nExample 1: Upgrade to the new v1.10 AddonRelease, only if the source version is 1.5.0 or higher.\n\nsourceVersionConstraints: '>=1.5.0'",
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "upgradeStrategy": {
+          "description": "upgradeStrategy specifies when an AddonRelease should be upgraded during a\ncluster upgrade.\n\nDeprecated behavior:\n  - The stage field represents the legacy mechanism for selecting the\n    upgrade timing.\n  - New behavior is driven by kubernetesVersionConstraints together with\n    workerVersionConstraints, which implicitly determines the correct\n    upgrade stage.\n\nNew behavior (constraint-driven stage selection):\n  - During a cluster upgrade, the currently installed AddonRelease is first\n    checked for compatibility with the TARGET cluster Kubernetes versions.\n  - If the installed version is incompatible, the addon MUST be upgraded.\n  - The exact point in the upgrade workflow where the upgrade occurs is\n    derived from kubernetesVersionConstraints and workerVersionConstraints\n  - See the AddonRelease type documentation for the complete upgrade workflow.\n\nWait semantics:\n  - wait controls whether the cluster upgrade process blocks until the\n    upgraded addon becomes ready.\n\nupgradeStrategy is used from the target addonRelease (to be upgraded) during upgrades.\n\nExamples:\n* cluster-autoscaler needs to be upgraded Before Cluster Upgrade and\nwe should block the cluster upgrade waiting for addon to be ready.\n\n```\nupgradeStrategy:\n  stage: \"BeforeClusterUpgrade\"\n  wait: \"TillReady\"\n```\n\n* CPI needs to be upgraded Before Cluster Upgrade and shouldn't block the stage,\nsince images will not be available.\n\n```\nupgradeStrategy:\n  stage: \"BeforeClusterUpgrade\"\n```",
+          "properties": {
+            "stage": {
+              "description": "stage specifies the stage to perform addon upgrade.\nDeprecated: stage is deprecated since v1alpha1 and will be removed in a future version.\nUse kubernetesVersionConstraints and workerVersionConstraints instead.",
+              "enum": [
+                "BeforeClusterUpgrade",
+                "AfterControlPlaneUpgrade",
+                "AfterClusterUpgrade"
+              ],
+              "type": "string"
+            },
+            "wait": {
+              "description": "wait specifies whether to wait for the addon to be ready or not.",
+              "enum": [
+                "TillReady",
+                "Never"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false
+        },
+        "version": {
+          "description": "version specifies semantic version (semver) of the AddonRelease.\nThis version is used to order AddonReleases if more than one are selected.\n\nBuild metadata (e.g., +vmware.3-vks.1) IS considered in version comparisons\nto allow for an addonRelease's version to be based on the version of the software being distributed,\nwhile allowing multiple addonReleases based on a single version of that component.\nThis means 0.13.0+vmware.5-vks.1 is considered greater than 0.13.0+vmware.3-vks.1.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "workerVersionConstraints": {
+          "description": "workerVersionConstraints specifies the target worker node version\nrequired for this AddonRelease to be deployed during upgrades.\nConstraints are checked against the TARGET worker version.\nNote: If the currently installed AddonRelease is incompatible with the TARGET worker\nversion during cluster upgrade, the addon upgrade is triggered before workers are\nupgraded.\n\nSee the AddonRelease type documentation for the complete upgrade workflow.\n\nExample: '>=1.33.0' means deploy when worker version target is 1.33.0+\n\nIf nil (and kubernetesVersionConstraints is also nil), the addon upgrade\ndefaults to AfterClusterUpgrade behavior.",
+          "maxLength": 1024,
+          "type": "string"
+        }
+      },
+      "required": [
+        "addonRef",
+        "version"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "spec"
+  ],
+  "type": "object",
+  "additionalProperties": false
+}

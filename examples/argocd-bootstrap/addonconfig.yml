@@ -1,0 +1,65 @@
+# Seeds a freshly provisioned cluster with everything Argo CD needs to take over:
+# the namespace, repository credentials, and an app-of-apps root Application.
+#
+# This is the case the service exists for. Argo CD cannot bootstrap a cluster it does
+# not yet know about, and nothing outside the Supervisor can reach the cluster during
+# provisioning. The addon runs on the Supervisor at provisioning time, so it can plant
+# the root Application before anything else needs it.
+#
+# Replace my-cluster / my-namespace, and point repoURL at your own repository.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+  annotations:
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  values:
+    resources:
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: argocd
+
+    # Repository credentials, so the root Application can resolve immediately.
+    # For anything real, source this from a Secret via your own pipeline rather than
+    # committing a token: an AddonConfig is readable by everyone with access to the
+    # Supervisor namespace.
+    - apiVersion: v1
+      kind: Secret
+      metadata:
+        name: platform-repo
+        namespace: argocd
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      stringData:
+        type: git
+        url: https://github.com/my-org/platform
+        username: git
+        password: REPLACE_ME
+
+    # The app-of-apps root. Everything else the cluster runs is pulled in from here,
+    # so this single resource is the whole handover to GitOps.
+    - apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: root
+        namespace: argocd
+      spec:
+        project: default
+        source:
+          repoURL: https://github.com/my-org/platform
+          targetRevision: main
+          path: clusters/my-cluster
+        destination:
+          server: https://kubernetes.default.svc
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true
+          syncOptions:
+          - CreateNamespace=true

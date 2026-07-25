@@ -1,0 +1,26 @@
+# Attaches the bootstrap addon to every cluster in this Supervisor namespace that
+# carries the label addons.kubernetes.vmware.com/bootstrap: enabled.
+#
+# Apply this once per Supervisor namespace. Any cluster created afterwards with the
+# label is seeded during provisioning, which is the point of the whole service.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonInstall
+metadata:
+  name: bootstrap-addoninstall
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+spec:
+  addonRef:
+    name: bootstrap
+  clusters:
+  - selector:
+      matchExpressions:
+      - key: addons.kubernetes.vmware.com/bootstrap
+        operator: In
+        values:
+        - enabled
+
+  # Delete removes the payload when a cluster stops matching. Use Retain to leave the
+  # seeded resources behind instead.
+  stopMatchingBehavior: Delete

@@ -1,0 +1,49 @@
+{
+  "description": "Addon represents a named add-on that can be installed on Kubernetes workload clusters.\nIt provides catalog-level metadata (description, display name, icon).\nAddonInstall resources reference an Addon to control which clusters the add-on is deployed to.",
+  "properties": {
+    "apiVersion": {
+      "description": "APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "spec": {
+      "description": "spec is the desired state of Addon.",
+      "properties": {
+        "description": {
+          "description": "description for the Addon.",
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "displayName": {
+          "description": "displayName is the human-friendly name for the addon.\n\nExamples:\n- \"Cert Manager\"\n- \"Antrea\"\n- \"External DNS\"",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "icon": {
+          "description": "icon is a data URI representing the addon icon.\nSupports data URIs with base64 encoding (SVG and PNG only).\n\nExamples:\n- SVG data URI: \"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=\"\n- PNG data URI: \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\"",
+          "maxLength": 1048576,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "spec"
+  ],
+  "type": "object",
+  "additionalProperties": false
+}

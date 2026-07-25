@@ -1,0 +1,20 @@
+#@data/values-schema
+---
+
+#! Namespace the supervisor deploys this service into. Filled in by the supervisor,
+#! do not edit.
+namespace: ""
+
+#! Namespace holding the VKS addon catalog. Only change this if VKS relocates it.
+addon_namespace: "vmware-system-vks-public"
+
+#! Addon name. Tenants reference this from AddonInstall.spec.addonRef and it forms
+#! the required "<cluster-name>-<addon-name>" AddonConfig name.
+addon_name: "bootstrap"
+
+#! Addon release version.
+addon_version: "1.0.0"
+
+#! Guest cluster Kubernetes versions this addon supports. Plain semver range, matching
+#! the format used by the shipped VKS addons (e.g. ">=1.35.0 <1.36.0").
+kubernetes_version_constraints: ">=1.33.0"

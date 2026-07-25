@@ -1,0 +1,31 @@
+# Payload as structured YAML rather than an embedded string. Each list item is one
+# complete resource. Easier to diff and to generate, and it survives schema validation
+# as real YAML instead of an opaque blob.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-bootstrap
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: bootstrap
+  annotations:
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  values:
+    # Narrow the rights the payload is applied with. Defaults to cluster-admin.
+    clusterRoleName: cluster-admin
+
+    resources:
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: platform
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: cluster-facts
+        namespace: platform
+      data:
+        environment: production
+        owner: platform-team
