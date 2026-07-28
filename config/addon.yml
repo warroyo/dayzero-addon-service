@@ -1,14 +1,12 @@
 #@ load("@ytt:data", "data")
+#@ load("helpers.star", "addon_namespace", "addon_labels")
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: Addon
 metadata:
   name: #@ data.values.addon_name
-  namespace: #@ data.values.addon_namespace
-  #! Required by the addon.validating.vmware.com webhook, which rejects the resource
-  #! unless this label matches the addon name.
-  labels:
-    addon.kubernetes.vmware.com/addon-name: #@ data.values.addon_name
+  namespace: #@ addon_namespace()
+  labels: #@ addon_labels()
 spec:
   displayName: Cluster Bootstrap YAML
   description: >-

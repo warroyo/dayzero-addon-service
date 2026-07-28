@@ -26,7 +26,7 @@ var schemaFor = map[string]string{
 func renderedDocs(t *testing.T) []map[string]any {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config")
+	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+addonNamespace)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -233,12 +233,14 @@ func TestConfigDefinitionRefsResolve(t *testing.T) {
 }
 
 // TestAddonResourcesSatisfyTheValidatingWebhook pins what
-// addon.validating.vmware.com enforces and the CRD schemas do not: the three CRs may
-// only live in vmware-system-vks-public, and each must carry an addon-name label
-// matching the addon. Both were rejections on a real install.
+// addon.validating.vmware.com enforces and the CRD schemas do not: the addon-name
+// label on each of the three, and one namespace shared by all of them including the
+// AddonRelease's refs, since an AddonRelease is rejected when its Addon is elsewhere.
+// Every rule here came from an install rejection.
 func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
 	const addonName = "bootstrap"
 	const nameLabel = "addon.kubernetes.vmware.com/addon-name"
+	const nsLabel = "addon.kubernetes.vmware.com/addon-namespace"
 
 	for _, doc := range renderedDocs(t) {
 		kind := doc["kind"].(string)
@@ -251,6 +253,9 @@ func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
 		labels, _ := meta["labels"].(map[string]any)
 		if got, _ := labels[nameLabel].(string); got != addonName {
 			t.Errorf("%s has %s = %q, want %q", kind, nameLabel, got, addonName)
+		}
+		if got, _ := labels[nsLabel].(string); got != addonNamespace {
+			t.Errorf("%s has %s = %q, want %q", kind, nsLabel, got, addonNamespace)
 		}
 
 		if kind != "AddonRelease" {

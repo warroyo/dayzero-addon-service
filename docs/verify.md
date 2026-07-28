@@ -64,32 +64,39 @@ vCenter → **Workload Management → Services → Add Service** → upload it �
 ## Step 2: did the definition land? (the gating question)
 
 ```sh
-kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
+kubectl get addon,addonrelease,acd -A | grep bootstrap
 ```
 
-All three should be present. The namespace is not negotiable:
-`addon.validating.vmware.com` rejects these kinds anywhere else, which is why the
-service writes into a namespace it does not own.
+All three should be present, in the service's own namespace
+(`svc-bootstrap-addon-<id>`). That namespace is not a choice: the deploy rewrites every
+namespaced resource in the package into it. Note it down, because every tenant
+`AddonInstall` has to name it in `spec.addonRef.namespace`.
 
 If they are absent, read the reconcile error:
 
 ```sh
-kubectl -n vmware-system-supervisor-services get pkgi -o yaml | grep -A20 bootstrap
+kubectl -n vmware-system-supervisor-services get pkgi \
+  svc-bootstrap-addon.fling.vsphere.vmware.com \
+  -o jsonpath='{.status.usefulErrorMessage}'
 ```
 
-A `Forbidden` there means the deployer service account cannot write to
-`vmware-system-vks-public`. The remedy is to ship the needed rights in `config/` so the
-service grants itself them on install. The reference service this repo is modelled on
-creates cluster-scoped `ClusterRole`s and `ClusterRoleBinding`s the same way, so the
-deployer account is privileged enough to create RBAC. It is not shipped preemptively,
-because Kubernetes escalation-prevention means an account can only grant rights it
-already holds or holds `escalate` for. Adding RBAC blindly can make the entire package
-install fail, which is worse than the addon CRs alone failing. Add it once the error
-says what is missing, and order it ahead of the addon CRs with
-`kapp.k14s.io/change-group` and `change-rule` annotations.
+**The open question is whether `Addon` is accepted outside
+`vmware-system-vks-public`.** `AddonConfigDefinition` and `AddonRelease` are, which is
+established. For `Addon`, the one rejection so far read:
 
-An admission denial rather than a `Forbidden` means the webhook found something else
-wrong with the CRs. It reports every complaint at once, and the message names the field.
+```
+- metadata.namespace: Unsupported value: "svc-bootstrap-addon-svr31":
+  supported values: "vmware-system-vks-public"
+- metadata.labels[addon.kubernetes.vmware.com/addon-name]: must be set to match "bootstrap"
+```
+
+The label is now set, so this install separates the two. If the namespace complaint is
+gone, the label was the whole problem. If it comes back on its own, `Addon` is confined
+to the public catalog, and since a Supervisor Service cannot write there, this delivery
+route is closed and the design needs rethinking rather than patching.
+
+A `Forbidden` instead of an admission denial would mean the deployer service account
+lacks rights in its own namespace, which would be surprising.
 
 If the `AddonRelease` is rejected at admission instead, check the error against
 *Package-free addons are legal* in `design.md`. Three shipped releases are
@@ -104,9 +111,14 @@ Apply, into the cluster's Supervisor namespace:
 1. [`examples/addonconfig-structured.yml`](../examples/addonconfig-structured.yml),
    renamed to `<cluster>-bootstrap`, starting with a trivial payload. One `ConfigMap`
    in `default` is enough to prove the path.
-2. [`examples/addoninstall.yml`](../examples/addoninstall.yml), then label the cluster.
+2. [`examples/addoninstall.yml`](../examples/addoninstall.yml), with
+   `spec.addonRef.namespace` set to the namespace from step 2, then label the cluster.
 
-If the `ClusterAddon` never appears, check the `AddonInstall`'s status first.
+This is also where cross-namespace resolution gets proven. No shipped addon lives
+outside `vmware-system-vks-public`, so the controller honouring `addonRef.namespace` is
+supported by the API shape but unexercised. If the `ClusterAddon` never appears, check
+the `AddonInstall`'s status and confirm the namespace matches before looking anywhere
+else.
 
 ## Step 4: watch reconciliation on the Supervisor
 
@@ -165,8 +177,9 @@ never needs workload-cluster credentials at all.
 
 | Symptom | Look at |
 |---|---|
-| Addon CRs never appear after install | The `pkgi` reconcile error, step 2. Deployer SA RBAC on `vmware-system-vks-public` is the expected first failure |
-| Addon CRs denied by admission | `addon.validating.vmware.com` enforces the namespace and the `addon.kubernetes.vmware.com/addon-name` label. See design.md, *Naming and placement conventions* |
+| Addon CRs never appear after install | `.status.usefulErrorMessage` on the `pkgi`, step 2 |
+| Addon CRs denied by admission | `addon.validating.vmware.com` enforces the labels, and that an `AddonRelease` shares a namespace with its `Addon` and its definition. See design.md, *Naming and placement conventions* |
+| Addon CRs land in the wrong namespace | They do not. The deploy rewrites the namespace of every resource in the package to the service's own |
 | `AddonRelease` rejected at admission | Missing `spec.package`. See design.md, *Package-free addons are legal* |
 | ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then read the conditions |
 | Template renders but references wrong data | Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon`. See design.md, *The template dialect*. Lowercase `.values` silently yields nothing |
