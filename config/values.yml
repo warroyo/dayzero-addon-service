@@ -5,8 +5,9 @@
 #! do not edit.
 namespace: ""
 
-#! Namespace holding the VKS addon catalog. Only change this if VKS relocates it.
-addon_namespace: "vmware-system-vks-public"
+#! Namespace the Addon, AddonRelease and AddonConfigDefinition are created in. Empty
+#! means this service's own namespace.
+addon_namespace: ""
 
 #! Addon name. Tenants reference this from AddonInstall.spec.addonRef and it forms
 #! the required "<cluster-name>-<addon-name>" AddonConfig name.

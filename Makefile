@@ -1,21 +1,21 @@
 PKG_NAME := bootstrap-addon.fling.vsphere.vmware.com
 ARTIFACT := bootstrap-addon.yml
 
+# Stands in for the namespace value the Supervisor supplies at install time.
+NAMESPACE ?= svc-bootstrap-addon-domain-c0
+
 .PHONY: render test release clean
 
-# Render the addon CRs exactly as the package build does.
+# Inspect the addon CRs as the package build renders them.
 render:
-	ytt -f config
+	@ytt -f config --data-value namespace=$(NAMESPACE)
 
 # Render the AddonConfigDefinition's Go templates the way the addon controller will.
-# There is no faster loop against a real Supervisor: creating an AddonConfigDefinition
-# is denied even to the vSphere administrator, so this is where template bugs get
-# caught before an upload.
 test:
 	cd test && go vet ./... && go test ./...
 
-# Build the Carvel package and assemble the supervisor service YAML. This is the file
-# uploaded through Workload Management -> Services -> Add Service.
+# Build the bundle and assemble bootstrap-addon.yml, the file uploaded through
+# Workload Management -> Services -> Add Service.
 release:
 	kctrl package release -y -v $(VERSION)
 	cp carvel-artifacts/packages/$(PKG_NAME)/metadata.yml ./$(ARTIFACT)

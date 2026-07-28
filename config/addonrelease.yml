@@ -1,24 +1,21 @@
 #@ load("@ytt:data", "data")
-#@ acd_name = "{}.kubernetes.vmware.com.{}".format(data.values.addon_name, data.values.addon_version)
+#@ load("helpers.star", "addon_namespace", "acd_name")
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRelease
 metadata:
   name: #@ "{}.{}".format(data.values.addon_name, data.values.addon_version)
-  namespace: #@ data.values.addon_namespace
+  namespace: #@ addon_namespace()
 spec:
+  #! Both namespaces are explicit: addonRef.namespace falls back to the public addon
+  #! catalog when unset, which is not where this addon lives.
   addonRef:
     name: #@ data.values.addon_name
-    namespace: #@ data.values.addon_namespace
+    namespace: #@ addon_namespace()
   addonConfigDefinitionRef:
-    name: #@ acd_name
-    namespace: #@ data.values.addon_namespace
+    name: #@ acd_name()
+    namespace: #@ addon_namespace()
   version: #@ data.values.addon_version
   kubernetesVersionConstraints: #@ data.values.kubernetes_version_constraints
-  #! No spec.package. This addon ships pure configuration: no Carvel package, no
-  #! chart, no images. Verified legal against the shipped carvel-repo, depot and
-  #! helm-repo AddonReleases on a live Supervisor, all of which are package-free.
-  #!
-  #! No dependsOn either. The payload should land as early as the addon system
-  #! allows, since its whole purpose is to seed the cluster before anything else
-  #! reaches it.
+  #! No spec.package: this addon is pure configuration. No dependsOn either, so the
+  #! payload lands as early as the addon system allows. See docs/design.md.

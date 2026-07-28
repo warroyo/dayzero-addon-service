@@ -1,28 +1,18 @@
-#@ load("@ytt:data", "data")
-#@ acd_name = "{}.kubernetes.vmware.com.{}".format(data.values.addon_name, data.values.addon_version)
+#@ load("helpers.star", "addon_namespace", "acd_name")
 
-#! The guest-cluster namespace, service account and ClusterRoleBinding names are
-#! deliberately hardcoded to "vks-bootstrap". They are not a meaningful operator
-#! knob, and keeping them literal avoids interleaving ytt substitution with the Go
-#! templates below, which are evaluated later by the addon controller.
-#!
-#! Everything inside a `template:` block is Go template + sprig, evaluated per
-#! cluster by the addon controller. Context roots available there:
-#!   .Values.<field>          - this AddonConfigDefinition's schema, from AddonConfig.spec.values
-#!   .Dependencies.<inputName> - a resolved templateInputResource
-#!   .Cluster.name / .Addon.name
-#! A `template:` body is the resource body ONLY: apiVersion, kind, metadata.name and
-#! metadata.namespace come from targetClusterOutput and must not appear here.
+#! Everything inside a `template:` block is Go template + sprig, evaluated per cluster
+#! by the addon controller, and is the resource BODY only - apiVersion, kind and
+#! metadata come from targetClusterOutput. Context roots and the function map are
+#! documented in docs/design.md; test/render_test.go reproduces them.
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonConfigDefinition
 metadata:
-  name: #@ acd_name
-  namespace: #@ data.values.addon_namespace
+  name: #@ acd_name()
+  namespace: #@ addon_namespace()
 spec:
-  #! Lets the addon controller read the tenant's optional payload ConfigMap out of
-  #! the cluster's own Supervisor namespace. This grants rights on the Supervisor,
-  #! not in the guest cluster.
+  #! Reads the optional payload ConfigMap from the cluster's Supervisor namespace.
+  #! Supervisor-side rights only, not guest-cluster rights.
   addonInstallPermission:
     accessPolicies:
     - order: 0
@@ -69,10 +59,7 @@ spec:
             instead of deleting them.
 
   templateInputResources:
-  #! Optional by design: the inline paths above must still render when no ConfigMap
-  #! exists. The name is fixed by convention rather than taken from .Values, because
-  #! templating an input resource name is only documented against .Dependencies and
-  #! .Cluster - .Values is unproven there.
+  #! Optional: the App must still render when no ConfigMap exists.
   - inputName: bootstrapConfigMap
     apiVersion: v1
     kind: ConfigMap
@@ -101,8 +88,7 @@ spec:
     template: |
       automountServiceAccountToken: true
 
-  #! 3 - grants that identity its permissions. Body shape (top-level roleRef and
-  #! subjects, no spec) matches the shipped vks-static ClusterRoleBinding output.
+  #! 3 - grants that identity its permissions.
   - targetClusterOutput:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -118,16 +104,8 @@ spec:
         name: vks-bootstrap
         namespace: vks-bootstrap
 
-  #! 4 - the App that actually applies the payload.
-  #!
-  #! An output's GVK is a static literal, so arbitrary payload kinds cannot be
-  #! emitted natively. Relaying through a kapp-controller App with an inline fetch
-  #! lifts that limit and adds pruning, GC, retry and a real status object. inline
-  #! carries content in the CR itself, so no OCI artifact is involved.
-  #!
-  #! Payload values are JSON-encoded rather than indented in. A JSON string is a
-  #! valid YAML scalar, so arbitrary multi-line YAML embeds with no indentation
-  #! arithmetic and no sensitivity to odd whitespace in the payload.
+  #! 4 - the App that applies the payload. Payload values are JSON-encoded, which is
+  #! valid YAML and needs no indentation arithmetic.
   - targetClusterOutput:
       apiVersion: kappctrl.k14s.io/v1alpha1
       kind: App
@@ -157,8 +135,7 @@ spec:
               {{- end }}
               {{- end }}
         template:
-        # Required field. ytt here is a passthrough that tolerates plain "#"
-        # comments in tenant-authored YAML.
+        # Required field; a passthrough that tolerates "#" comments in the payload.
         - ytt:
             ignoreUnknownComments: true
         deploy:

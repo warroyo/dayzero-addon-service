@@ -12,20 +12,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Schemas in testdata are extracted from the CRDs on a live Supervisor (VKS 3.7) with
-// two modifications: x-kubernetes-* extensions are stripped, and additionalProperties
-// is set to false on every object that does not explicitly preserve unknown fields.
-//
-// That second change is the point. A Kubernetes API server silently *prunes* unknown
-// fields in a custom resource rather than rejecting them, so a misspelled field name
-// produces a quietly wrong AddonConfigDefinition rather than an error. Validating
-// strictly here turns that class of typo into a test failure.
-//
-// Refresh with:
-//
-//	kubectl get crd <plural>.addons.kubernetes.vmware.com -o json | jq '...'
-//
-// (the full jq filter is in docs/plan.md).
+// Schemas are extracted from the CRDs on a live Supervisor (VKS 3.7), with
+// x-kubernetes-* extensions stripped and additionalProperties set to false wherever
+// the CRD does not preserve unknown fields - stricter than the API server, which
+// prunes typos silently. docs/plan.md has the jq filter to regenerate them.
 var schemaFor = map[string]string{
 	"AddonConfigDefinition": "schemas/addonconfigdefinitions.json",
 	"Addon":                 "schemas/addons.json",
@@ -36,7 +26,7 @@ var schemaFor = map[string]string{
 func renderedDocs(t *testing.T) []map[string]any {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config")
+	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+testNamespace)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -93,10 +83,8 @@ func toJSONValue(t *testing.T, v any) any {
 }
 
 // TestRenderedResourcesMatchCRDSchemas validates every rendered addon resource against
-// the real CRD schema. This is the closest thing to a server-side dry run available:
-// creating these kinds is denied even to the vSphere administrator, and a client-side
-// dry run validates nothing at all (verified: it accepts both bogus fields and invalid
-// enum values).
+// the real CRD schema. These kinds cannot be applied by hand, so this stands in for a
+// server-side dry run.
 func TestRenderedResourcesMatchCRDSchemas(t *testing.T) {
 	docs := renderedDocs(t)
 	if len(docs) != 3 {
@@ -126,9 +114,8 @@ func TestRenderedResourcesMatchCRDSchemas(t *testing.T) {
 	}
 }
 
-// TestSchemaValidationHasTeeth guards the guard. Strict validation is only worth
-// anything if it actually rejects bad input, and the obvious alternative
-// (kubectl apply --dry-run=client) turned out to accept everything.
+// TestSchemaValidationHasTeeth guards the guard: strict validation is only worth
+// running if it actually rejects bad input.
 func TestSchemaValidationHasTeeth(t *testing.T) {
 	schema := compileSchema(t, schemaFor["AddonConfigDefinition"])
 
@@ -242,6 +229,31 @@ func TestConfigDefinitionRefsResolve(t *testing.T) {
 	// the addon is actually called "bootstrap".
 	if !strings.HasSuffix(acdRef, ".kubernetes.vmware.com."+versionOf(t, spec)) {
 		t.Errorf("definition name %q does not follow the <addon>.kubernetes.vmware.com.<version> convention", acdRef)
+	}
+}
+
+// TestAddonResourcesLandInServiceNamespace pins the three CRs to the namespace the
+// Supervisor deploys this service into, and pins the refs between them to it as well -
+// addonRef.namespace falls back to the public addon catalog when unset.
+func TestAddonResourcesLandInServiceNamespace(t *testing.T) {
+	for _, doc := range renderedDocs(t) {
+		kind := doc["kind"].(string)
+		meta := doc["metadata"].(map[string]any)
+
+		if ns, _ := meta["namespace"].(string); ns != testNamespace {
+			t.Errorf("%s is created in namespace %q, want the service's own namespace %q", kind, ns, testNamespace)
+		}
+
+		if kind != "AddonRelease" {
+			continue
+		}
+		spec := doc["spec"].(map[string]any)
+		for _, ref := range []string{"addonRef", "addonConfigDefinitionRef"} {
+			ns, _ := spec[ref].(map[string]any)["namespace"].(string)
+			if ns != testNamespace {
+				t.Errorf("AddonRelease.spec.%s.namespace = %q, want %q; unset falls back to the public namespace", ref, ns, testNamespace)
+			}
+		}
 	}
 }
 

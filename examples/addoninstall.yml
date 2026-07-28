@@ -11,8 +11,11 @@ metadata:
   labels:
     app.kubernetes.io/name: bootstrap
 spec:
+  # The namespace is the service's own, not the public addon catalog addonRef falls
+  # back to when it is unset. Find it with: kubectl get addon -A | grep bootstrap
   addonRef:
     name: bootstrap
+    namespace: svc-bootstrap-addon-domain-c0
   clusters:
   - selector:
       matchExpressions:

@@ -1,8 +1,7 @@
 // Package test renders the AddonConfigDefinition's Go templates the way the VKS
 // addon controller does, so template bugs surface here instead of after a vCenter
-// upload. There is no faster loop against a real Supervisor: creating an
-// AddonConfigDefinition is denied even to the vSphere administrator, so the only
-// way to exercise the real controller is to build, upload and install the service.
+// upload. The kinds involved cannot be applied by hand, so build-upload-install is
+// otherwise the only loop. See docs/verify.md.
 package test
 
 import (
@@ -42,11 +41,15 @@ type acd struct {
 	} `yaml:"spec"`
 }
 
+// testNamespace stands in for the namespace value the Supervisor supplies at install
+// time.
+const testNamespace = "svc-bootstrap-addon-domain-c0"
+
 // renderConfig runs ytt over config/ exactly as the package build does.
 func renderConfig(t *testing.T) acd {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config")
+	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+testNamespace)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
