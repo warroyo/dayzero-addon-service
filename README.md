@@ -16,9 +16,11 @@ by the vSphere administrator, in any namespace. They come from a Supervisor Serv
 from an `AddonRepository` reconcile, and nowhere else. Tenants, meanwhile, can freely
 create `AddonInstall` and `AddonConfig` in their own vSphere namespace.
 
-This service registers its three CRs in its own namespace, because a Supervisor Service
-deploy rewrites every namespaced resource in the package into that namespace. Tenants
-point at them with `AddonInstall.spec.addonRef.namespace`.
+This service registers its three CRs in `vmware-system-vks-public`, where every addon
+lives. It cannot apply them itself, because a Supervisor Service deploy rewrites every
+namespaced resource in the package into the service's own namespace. Instead the package
+ships RBAC and a kapp-controller `App`, and the App applies them. See
+[How it works](#how-it-works).
 
 So a one-time admin install of this service permanently delegates "seed my workload
 cluster with arbitrary YAML" to tenants, with no workload-cluster kubeconfig, no
@@ -49,15 +51,24 @@ kapp-controller, already present in every VKS cluster, applies whatever is insid
 pruning, GC, retry and status for free.
 
 ```
-Supervisor                          Workload cluster
-──────────                          ────────────────
-Addon                    ┌────────► Namespace           vks-bootstrap
-AddonRelease (no pkg)    │          ServiceAccount      vks-bootstrap
-AddonConfigDefinition ───┤          ClusterRoleBinding  vks-bootstrap
-  in vks-public          └────────► App (kapp-controller)
-AddonInstall  ┐                       └── your YAML, applied
-AddonConfig   ┘ per tenant, in the cluster's ns
+Supervisor                                    Workload cluster
+──────────                                    ────────────────
+service ns: RBAC + App ──┐
+                         ▼
+vks-public: Addon        ┌──────────────────► Namespace           vks-bootstrap
+            AddonRelease │                    ServiceAccount      vks-bootstrap
+            ACD ─────────┤                    ClusterRoleBinding  vks-bootstrap
+                         └──────────────────► App (kapp-controller)
+tenant ns:  AddonInstall                        └── your YAML, applied
+            AddonConfig
 ```
+
+The package cannot create the addon CRs itself: a Supervisor Service deploy rewrites
+every namespaced resource it applies into the service's own namespace, and an `Addon` is
+only valid in `vmware-system-vks-public`. The rewrite is a field on the App, though, so
+the package ships its own `App` carrying the three CRs inline, and that one applies them
+where they belong. Deleting the service deletes the App, and kapp-controller takes the
+addon with it.
 
 Changing the payload is a data edit. There is no rebuild, no version bump and no
 re-upload.
@@ -68,14 +79,11 @@ re-upload.
 2. In vCenter, go to **Workload Management → Services → Add Service** and upload it.
 3. Install it on the Supervisor.
 
-Confirm the addon registered, and note the namespace it landed in, because tenants
-need it:
+Confirm the addon registered:
 
 ```sh
-kubectl get addon,addonrelease,acd -A | grep bootstrap
+kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
 ```
-
-All three are in the service's own namespace, named like `svc-bootstrap-addon-<id>`.
 
 ### Air-gapped
 
@@ -94,9 +102,8 @@ and follow the steps above.
 Two objects per cluster, both in the cluster's own Supervisor namespace.
 
 First, attach the addon, once per namespace. See
-[`examples/addoninstall.yml`](examples/addoninstall.yml). Its `addonRef` must name the
-service's namespace from the install step, since unset it resolves to the public addon
-catalog the addon is not in. Then label the clusters to seed:
+[`examples/addoninstall.yml`](examples/addoninstall.yml). Then label the clusters to
+seed:
 
 ```sh
 kubectl label cluster my-cluster addons.kubernetes.vmware.com/bootstrap=enabled
@@ -183,10 +190,10 @@ Locally: `VERSION=1.0.0 make release`.
 
 ## Verifying
 
-Untested end to end. `AddonConfigDefinition` and `AddonRelease` have been observed
-installing into a service namespace. The open question is `Addon`, which the validating
-webhook may confine to `vmware-system-vks-public`, a namespace no Supervisor Service can
-write to. Details in [`docs/verify.md`](docs/verify.md).
+Untested end to end. The open question is whether the service's deployer account may
+create the `ClusterRole` that lets the App write to `vmware-system-vks-public`, since
+Kubernetes escalation-prevention allows an account to grant only rights it already
+holds. Details in [`docs/verify.md`](docs/verify.md).
 
 ## Docs
 

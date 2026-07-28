@@ -22,11 +22,23 @@ var schemaFor = map[string]string{
 	"AddonRelease":          "schemas/addonreleases.json",
 }
 
-// renderedDocs runs ytt over config/ and returns each document as a generic map.
+const (
+	// serviceNamespace stands in for the namespace the Supervisor deploys this service
+	// into and supplies as a data value. Everything the package applies itself is
+	// rewritten into it.
+	serviceNamespace = "svc-bootstrap-addon-svr31"
+
+	// addonNamespace is where the App puts the three addon CRs. An Addon is only valid
+	// in the public catalog, which the package cannot write to itself.
+	addonNamespace = "vmware-system-vks-public"
+)
+
+// renderedDocs runs ytt over config/ and returns each document as a generic map. These
+// are the resources the package applies: the RBAC and the App, not the addon CRs.
 func renderedDocs(t *testing.T) []map[string]any {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+addonNamespace)
+	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+serviceNamespace)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -35,6 +47,48 @@ func renderedDocs(t *testing.T) []map[string]any {
 
 	var docs []map[string]any
 	dec := yaml.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			break
+		}
+		if len(doc) > 0 {
+			docs = append(docs, doc)
+		}
+	}
+	return docs
+}
+
+// inlineAddonYAML returns the multi-document YAML the App carries in its inline paths.
+// The package cannot create the addon CRs itself, so they travel as App content and
+// this is the only place they exist before install.
+func inlineAddonYAML(t *testing.T) []byte {
+	t.Helper()
+
+	for _, doc := range renderedDocs(t) {
+		if doc["kind"] != "App" {
+			continue
+		}
+		spec := doc["spec"].(map[string]any)
+		fetch := spec["fetch"].([]any)
+		paths := fetch[0].(map[string]any)["inline"].(map[string]any)["paths"].(map[string]any)
+		if len(paths) != 1 {
+			t.Fatalf("expected exactly one inline path, got %d", len(paths))
+		}
+		for _, content := range paths {
+			return []byte(content.(string))
+		}
+	}
+	t.Fatal("no App in the rendered config")
+	return nil
+}
+
+// addonDocs returns the three addon CRs the App carries.
+func addonDocs(t *testing.T) []map[string]any {
+	t.Helper()
+
+	var docs []map[string]any
+	dec := yaml.NewDecoder(bytes.NewReader(inlineAddonYAML(t)))
 	for {
 		var doc map[string]any
 		if err := dec.Decode(&doc); err != nil {
@@ -86,7 +140,7 @@ func toJSONValue(t *testing.T, v any) any {
 // the real CRD schema. These kinds cannot be applied by hand, so this stands in for a
 // server-side dry run.
 func TestRenderedResourcesMatchCRDSchemas(t *testing.T) {
-	docs := renderedDocs(t)
+	docs := addonDocs(t)
 	if len(docs) != 3 {
 		t.Fatalf("expected 3 rendered documents, got %d", len(docs))
 	}
@@ -120,7 +174,7 @@ func TestSchemaValidationHasTeeth(t *testing.T) {
 	schema := compileSchema(t, schemaFor["AddonConfigDefinition"])
 
 	var acdDoc map[string]any
-	for _, doc := range renderedDocs(t) {
+	for _, doc := range addonDocs(t) {
 		if doc["kind"] == "AddonConfigDefinition" {
 			acdDoc = doc
 		}
@@ -180,7 +234,7 @@ func TestSchemaValidationHasTeeth(t *testing.T) {
 // future edit adds spec.package, the addon stops being pure configuration and starts
 // pulling a Carvel package into the guest cluster.
 func TestAddonReleaseIsPackageFree(t *testing.T) {
-	for _, doc := range renderedDocs(t) {
+	for _, doc := range addonDocs(t) {
 		if doc["kind"] != "AddonRelease" {
 			continue
 		}
@@ -203,7 +257,7 @@ func TestConfigDefinitionRefsResolve(t *testing.T) {
 	names := map[string]string{}
 	var release map[string]any
 
-	for _, doc := range renderedDocs(t) {
+	for _, doc := range addonDocs(t) {
 		meta := doc["metadata"].(map[string]any)
 		names[doc["kind"].(string)] = meta["name"].(string)
 		if doc["kind"] == "AddonRelease" {
@@ -242,7 +296,7 @@ func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
 	const nameLabel = "addon.kubernetes.vmware.com/addon-name"
 	const nsLabel = "addon.kubernetes.vmware.com/addon-namespace"
 
-	for _, doc := range renderedDocs(t) {
+	for _, doc := range addonDocs(t) {
 		kind := doc["kind"].(string)
 		meta := doc["metadata"].(map[string]any)
 
@@ -267,6 +321,72 @@ func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
 			if ns != addonNamespace {
 				t.Errorf("AddonRelease.spec.%s.namespace = %q, want %q", ref, ns, addonNamespace)
 			}
+		}
+	}
+}
+
+// TestAppCarriesTheAddonCRsIntoThePublicNamespace pins the wiring the whole install
+// depends on. The App must not set a namespace rewrite of its own, since that is
+// exactly what stops the package applying these resources directly, and it must run as
+// the service account the ClusterRoleBinding grants rights to.
+func TestAppCarriesTheAddonCRsIntoThePublicNamespace(t *testing.T) {
+	var app, clusterRole, binding map[string]any
+	for _, doc := range renderedDocs(t) {
+		switch doc["kind"] {
+		case "App":
+			app = doc
+		case "ClusterRole":
+			clusterRole = doc
+		case "ClusterRoleBinding":
+			binding = doc
+		}
+	}
+	if app == nil || clusterRole == nil || binding == nil {
+		t.Fatal("the package must ship an App, a ClusterRole and a ClusterRoleBinding")
+	}
+
+	spec := app["spec"].(map[string]any)
+
+	if _, found := spec["defaultNamespace"]; found {
+		t.Error("App sets spec.defaultNamespace; that rewrites the addon CRs out of the public namespace")
+	}
+	if deploy, ok := spec["deploy"].([]any); ok && len(deploy) > 0 {
+		if kapp, ok := deploy[0].(map[string]any)["kapp"].(map[string]any); ok {
+			for _, f := range []string{"intoNs", "mapNs"} {
+				if _, found := kapp[f]; found {
+					t.Errorf("App sets deploy.kapp.%s; that rewrites the addon CRs out of the public namespace", f)
+				}
+			}
+		}
+	}
+
+	sa, _ := spec["serviceAccountName"].(string)
+	if sa == "" {
+		t.Fatal("App has no serviceAccountName, so it has no rights in the public namespace")
+	}
+	subjects := binding["subjects"].([]any)
+	if got := subjects[0].(map[string]any)["name"].(string); got != sa {
+		t.Errorf("ClusterRoleBinding binds %q but the App runs as %q", got, sa)
+	}
+
+	// The verbs kapp needs to create the CRs, correct drift and delete them on removal.
+	rule := clusterRole["rules"].([]any)[0].(map[string]any)
+	verbs := map[string]bool{}
+	for _, v := range rule["verbs"].([]any) {
+		verbs[v.(string)] = true
+	}
+	for _, needed := range []string{"create", "update", "delete", "get", "list"} {
+		if !verbs[needed] {
+			t.Errorf("ClusterRole is missing the %q verb", needed)
+		}
+	}
+	resources := map[string]bool{}
+	for _, r := range rule["resources"].([]any) {
+		resources[r.(string)] = true
+	}
+	for _, needed := range []string{"addons", "addonreleases", "addonconfigdefinitions"} {
+		if !resources[needed] {
+			t.Errorf("ClusterRole does not cover %q", needed)
 		}
 	}
 }

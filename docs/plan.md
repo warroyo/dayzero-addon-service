@@ -12,10 +12,12 @@ bootstrap-addon-service/
 ├── package-resources.yml          # Package + PackageMetadata + PackageInstall
 ├── config/                        # ytt-rendered, imgpkg-bundled
 │   ├── values.yml                 # ytt data-values schema, surfaced by vCenter at install
-│   ├── helpers.star               # definition name, computed once and shared
-│   ├── addon.yml
-│   ├── addonrelease.yml           # no spec.package
-│   └── addonconfigdefinition.yml  # the core piece
+│   ├── rbac.yml                   # SA in the service ns, ClusterRole for the public ns
+│   ├── app.yml                    # the App that creates the addon CRs
+│   └── _ytt_lib/addon/            # the three CRs, rendered into the App's inline paths
+│       ├── addon.yml
+│       ├── addonrelease.yml       # no spec.package
+│       └── addonconfigdefinition.yml  # the core piece
 ├── test/                          # renders the definition's Go templates
 ├── examples/
 └── docs/
@@ -34,7 +36,10 @@ templates at reconcile time (`{{ }}`). They do not collide, but interleaving the
 unreadable.
 
 So ytt is used only for values that vary per *release*, meaning addon name, version and
-namespace, and the guest-cluster resource names are hardcoded to `vks-bootstrap`.
+namespace, and the guest-cluster resource names are hardcoded to `vks-bootstrap`. The
+three CRs sit in `config/_ytt_lib/addon` so ytt does not emit them as package resources;
+`config/app.yml` evaluates that library and `yaml.encode`s the result into the App's
+inline paths.
 Anything that varies per *cluster* goes through the definition's own schema and is
 read at runtime as `.Values.<field>`.
 
@@ -42,7 +47,7 @@ read at runtime as `.Values.<field>`.
 
 | Target | Does |
 |---|---|
-| `render` | `ytt -f config` |
+| `render` | `ytt -f config`, with `NAMESPACE` standing in for the value the Supervisor supplies at install |
 | `test`   | `go vet` and `go test` in `test/`, which render each output template and assert the result |
 | `release`| `kctrl package release`, then concatenates the generated `metadata.yml` and `package.yml` into `bootstrap-addon.yml` |
 
@@ -70,10 +75,10 @@ paths map for every combination of payload sources including none, and that awkw
 payloads survive the JSON encoding intact, including colons in ConfigMap keys and
 comments and blank lines in raw YAML.
 
-`test/schema_test.go` validates the rendered resources against the real CRD schemas in
-`test/schemas/`, and pins what the schemas leave out: the namespace the validating
-webhook demands and the `addon.kubernetes.vmware.com/addon-name` label it requires on
-each of the three. Note that `kubectl apply
+`test/schema_test.go` reaches through the App into its inline paths, where the three CRs
+live, and validates them against the real CRD schemas in `test/schemas/`. It also pins
+what the schemas leave out: the namespace and labels the validating webhook demands, and
+that the App carries no namespace rewrite of its own. Note that `kubectl apply
 --dry-run=client --validate=true` is not a substitute, since it accepts invalid enum
 values and invented fields alike. Server-side dry run hits the same RBAC wall as a real
 apply.

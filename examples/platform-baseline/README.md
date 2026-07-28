@@ -26,8 +26,7 @@ which is exactly the handover this addon removes.
    a wrong string binds silently to nobody.
 2. Apply it into the cluster's Supervisor namespace.
 3. Apply [`../addoninstall.yml`](../addoninstall.yml) once per Supervisor namespace,
-   with `spec.addonRef.namespace` set to the namespace the service was installed into
-   (`kubectl get addon -A | grep bootstrap`). Then label the clusters to seed:
+   then label the clusters to seed:
 
 ```sh
 kubectl label cluster my-cluster addons.kubernetes.vmware.com/bootstrap=enabled

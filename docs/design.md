@@ -18,19 +18,33 @@ Installing this Supervisor Service is therefore one of only two routes that exis
 the only one that keeps the addon package-free. See
 [Alternatives rejected](#alternatives-rejected).
 
-Where they land is not up to the package. A Supervisor Service is deployed with kapp
-under a service account, and every namespaced resource in it is rewritten into the
-service's own namespace, `svc-<service>-<id>`. An `AddonConfigDefinition` authored with
-`namespace: vmware-system-vks-public` was observed landing in
-`svc-bootstrap-addon-svr31` on a real install. So the three CRs go where the deploy puts
-them, and the config names that namespace explicitly to keep the refs between them
-consistent. Cluster-scoped resources are exempt from the rewrite, which is how the
-`sre-supervisor-role` service creates `ClusterRole`s.
+An `Addon` is only valid in `vmware-system-vks-public`, and the package cannot write
+there. A Supervisor Service is deployed with the kapp namespace rewrite set, so every
+namespaced resource it applies lands in the service's own namespace,
+`svc-<service>-<id>`. An `AddonConfigDefinition` authored with `namespace:
+vmware-system-vks-public` was observed landing in `svc-bootstrap-addon-svr31` on a real
+install. `AddonConfigDefinition` and `AddonRelease` are accepted there; `Addon` is not.
 
-`AddonConfigDefinition` and `AddonRelease` are accepted in a service namespace. Whether
-`Addon` is remains open: the one rejection seen so far named the namespace, but that
-resource was also missing a required label, so the two cannot be separated yet. See
-[`verify.md`](./verify.md) step 2.
+Two things make the way through. The rewrite is a field on the App, not a property of
+deploying under a service account, so an App this package creates is free of it.
+Cluster-scoped resources are exempt from the rewrite, so the package can create RBAC
+anywhere. Putting those together, the package ships:
+
+| Resource | Scope | Lands in |
+|---|---|---|
+| `ServiceAccount`, `Role`, `RoleBinding` | Namespace | the service namespace |
+| `ClusterRole`, `ClusterRoleBinding` | Cluster | cluster-wide |
+| `App` (kapp-controller) | Namespace | the service namespace |
+
+The three addon CRs are not applied by the package at all. They live in
+`config/_ytt_lib/addon`, are rendered at build time and carried inline by the App, which
+runs under the service account and applies them into `vmware-system-vks-public`. That
+also settles their lifecycle: kapp-controller deletes an App's resources when the App
+goes away, so uninstalling the service removes the addon from the catalog. Nothing is
+orphaned, and no owner references or finalizers of our own are involved.
+
+Creating the `ClusterRole` is subject to Kubernetes escalation-prevention, so the
+deployer account has to hold those verbs already. See [`verify.md`](./verify.md) step 2.
 
 So a one-time admin install permanently delegates "seed my workload cluster with
 arbitrary YAML" to tenants, with:
@@ -205,8 +219,9 @@ document that follows a plain Kubernetes YAML format") as an alternative to
 ## Naming and placement conventions
 
 - `AddonConfigDefinition` names look like `ako.kubernetes.vmware.com.1.13.4+vmware.1-vks.1`
-- The shipped addons all live in `vmware-system-vks-public`. This one lives in the
-  service namespace, because that is where the deploy puts it
+- Every addon lives in `vmware-system-vks-public`, this one included. An `AddonRelease`
+  must be in the same namespace as the `Addon` its `addonRef` names, and its
+  `definitionRef` resolves in that namespace too
 - Each of the three must carry the label
   `addon.kubernetes.vmware.com/addon-name`, set to the addon name. The webhook rejects
   the resource without it: "label addon.kubernetes.vmware.com/addon-name must be set to
@@ -378,10 +393,9 @@ permitted to drive. Rejected, and not held in reserve, for two independent reaso
    Service. The Supervisor Service is meant to be the only external artifact this
    project requires. That constraint is part of the design rather than a convenience.
 
-The namespace rewrite makes this concrete: a Supervisor Service cannot place the addon
-CRs in `vmware-system-vks-public` at all, no matter what RBAC it holds, so the addon
-lives in the service namespace and tenants reach it through
-`AddonInstall.spec.addonRef.namespace`.
+The namespace rewrite is why the package hands the addon CRs to an App instead of
+applying them: the rewrite is set on the App the Supervisor creates for the service, and
+an App the package creates for itself does not carry it.
 
 ---
 

@@ -1,11 +1,11 @@
 #@ load("@ytt:data", "data")
-#@ load("helpers.star", "addon_namespace", "addon_labels")
+#@ load("helpers.star", "addon_labels")
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: Addon
 metadata:
   name: #@ data.values.addon_name
-  namespace: #@ addon_namespace()
+  namespace: #@ data.values.addon_namespace
   labels: #@ addon_labels()
 spec:
   displayName: Cluster Bootstrap YAML

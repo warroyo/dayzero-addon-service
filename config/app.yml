@@ -1,0 +1,37 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:library", "library")
+#@ load("@ytt:yaml", "yaml")
+
+#! The three addon CRs live in _ytt_lib/addon so they are not emitted by this package
+#! directly. They are rendered here and carried inline by the App below.
+#!
+#! The App is what actually creates them. A Supervisor Service package is deployed with
+#! the namespace rewrite set, so anything it applies itself lands in the service's own
+#! namespace, and an Addon is only valid in vmware-system-vks-public. An App we author
+#! does not set that field, so its own resources go where their YAML says.
+#@ addon = library.get("addon").with_data_values({
+#@   "addon_namespace": data.values.addon_namespace,
+#@   "addon_name": data.values.addon_name,
+#@   "addon_version": data.values.addon_version,
+#@   "kubernetes_version_constraints": data.values.kubernetes_version_constraints,
+#@ }).eval()
+---
+apiVersion: kappctrl.k14s.io/v1alpha1
+kind: App
+metadata:
+  name: bootstrap-addon-resources
+  namespace: #@ data.values.namespace
+spec:
+  serviceAccountName: bootstrap-addon-installer
+  syncPeriod: #@ data.values.addon_sync_period
+  fetch:
+  - inline:
+      paths:
+        addon-resources.yml: #@ yaml.encode(addon)
+  template:
+  #! Passthrough. The addon CRs carry Go templates for the addon controller to
+  #! evaluate later, which ytt leaves alone.
+  - ytt:
+      ignoreUnknownComments: true
+  deploy:
+  - kapp: {}

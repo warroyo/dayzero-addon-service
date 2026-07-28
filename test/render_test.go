@@ -41,23 +41,11 @@ type acd struct {
 	} `yaml:"spec"`
 }
 
-// addonNamespace stands in for the namespace value the Supervisor supplies at install
-// time. The deploy rewrites every resource in the package into that namespace, so it is
-// also where the three CRs end up whatever the YAML says.
-const addonNamespace = "svc-bootstrap-addon-svr31"
-
-// renderConfig runs ytt over config/ exactly as the package build does.
+// renderConfig returns the AddonConfigDefinition the App carries inline.
 func renderConfig(t *testing.T) acd {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+addonNamespace)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("ytt -f ../config failed: %v\n%s", err, stderr.String())
-	}
-
-	dec := yaml.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	dec := yaml.NewDecoder(bytes.NewReader(inlineAddonYAML(t)))
 	for {
 		var doc acd
 		if err := dec.Decode(&doc); err != nil {
@@ -67,7 +55,7 @@ func renderConfig(t *testing.T) acd {
 			return doc
 		}
 	}
-	t.Fatal("no AddonConfigDefinition in rendered config")
+	t.Fatal("no AddonConfigDefinition in the App's inline paths")
 	return acd{}
 }
 

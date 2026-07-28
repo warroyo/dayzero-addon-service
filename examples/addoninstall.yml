@@ -11,12 +11,10 @@ metadata:
   labels:
     app.kubernetes.io/name: bootstrap
 spec:
-  # Required. The addon lives in the Supervisor Service's own namespace, not in the
-  # public addon catalog addonRef falls back to when this is unset. Find it with:
-  # kubectl get addon -A | grep bootstrap
+  # No namespace: addonRef falls back to the public addon catalog, which is where the
+  # addon system requires an Addon to live.
   addonRef:
     name: bootstrap
-    namespace: svc-bootstrap-addon-svr31
   clusters:
   - selector:
       matchExpressions:

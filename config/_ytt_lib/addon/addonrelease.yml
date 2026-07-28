@@ -1,21 +1,21 @@
 #@ load("@ytt:data", "data")
-#@ load("helpers.star", "addon_namespace", "acd_name", "addon_labels")
+#@ load("helpers.star", "acd_name", "addon_labels")
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRelease
 metadata:
   name: #@ "{}.{}".format(data.values.addon_name, data.values.addon_version)
-  namespace: #@ addon_namespace()
+  namespace: #@ data.values.addon_namespace
   labels: #@ addon_labels()
 spec:
   #! Both refs must name the AddonRelease's own namespace. The webhook rejects an
   #! AddonRelease whose Addon is elsewhere, and resolves definitionRef by namespace.
   addonRef:
     name: #@ data.values.addon_name
-    namespace: #@ addon_namespace()
+    namespace: #@ data.values.addon_namespace
   addonConfigDefinitionRef:
     name: #@ acd_name()
-    namespace: #@ addon_namespace()
+    namespace: #@ data.values.addon_namespace
   version: #@ data.values.addon_version
   kubernetesVersionConstraints: #@ data.values.kubernetes_version_constraints
   #! No spec.package: this addon is pure configuration. No dependsOn either, so the
