@@ -12,7 +12,7 @@ bootstrap-addon-service/
 ├── package-resources.yml          # Package + PackageMetadata + PackageInstall
 ├── config/                        # ytt-rendered, imgpkg-bundled
 │   ├── values.yml                 # ytt data-values schema, surfaced by vCenter at install
-│   ├── helpers.star               # addon namespace + definition name, computed once
+│   ├── helpers.star               # definition name, computed once and shared
 │   ├── addon.yml
 │   ├── addonrelease.yml           # no spec.package
 │   └── addonconfigdefinition.yml  # the core piece
@@ -42,7 +42,7 @@ read at runtime as `.Values.<field>`.
 
 | Target | Does |
 |---|---|
-| `render` | `ytt -f config`, with `NAMESPACE` standing in for the value the Supervisor supplies at install |
+| `render` | `ytt -f config` |
 | `test`   | `go vet` and `go test` in `test/`, which render each output template and assert the result |
 | `release`| `kctrl package release`, then concatenates the generated `metadata.yml` and `package.yml` into `bootstrap-addon.yml` |
 
@@ -71,7 +71,9 @@ payloads survive the JSON encoding intact, including colons in ConfigMap keys an
 comments and blank lines in raw YAML.
 
 `test/schema_test.go` validates the rendered resources against the real CRD schemas in
-`test/schemas/`, and pins the namespace the three CRs land in. Note that `kubectl apply
+`test/schemas/`, and pins what the schemas leave out: the namespace the validating
+webhook demands and the `addon.kubernetes.vmware.com/addon-name` label it requires on
+each of the three. Note that `kubectl apply
 --dry-run=client --validate=true` is not a substitute, since it accepts invalid enum
 values and invented fields alike. Server-side dry run hits the same RBAC wall as a real
 apply.

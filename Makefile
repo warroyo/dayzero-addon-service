@@ -1,14 +1,11 @@
 PKG_NAME := bootstrap-addon.fling.vsphere.vmware.com
 ARTIFACT := bootstrap-addon.yml
 
-# Stands in for the namespace value the Supervisor supplies at install time.
-NAMESPACE ?= svc-bootstrap-addon-domain-c0
-
 .PHONY: render test release clean
 
 # Inspect the addon CRs as the package build renders them.
 render:
-	@ytt -f config --data-value namespace=$(NAMESPACE)
+	@ytt -f config
 
 # Render the AddonConfigDefinition's Go templates the way the addon controller will.
 test:

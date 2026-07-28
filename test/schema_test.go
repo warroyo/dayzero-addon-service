@@ -26,7 +26,7 @@ var schemaFor = map[string]string{
 func renderedDocs(t *testing.T) []map[string]any {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+testNamespace)
+	cmd := exec.Command("ytt", "-f", "../config")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -232,16 +232,25 @@ func TestConfigDefinitionRefsResolve(t *testing.T) {
 	}
 }
 
-// TestAddonResourcesLandInServiceNamespace pins the three CRs to the namespace the
-// Supervisor deploys this service into, and pins the refs between them to it as well -
-// addonRef.namespace falls back to the public addon catalog when unset.
-func TestAddonResourcesLandInServiceNamespace(t *testing.T) {
+// TestAddonResourcesSatisfyTheValidatingWebhook pins what
+// addon.validating.vmware.com enforces and the CRD schemas do not: the three CRs may
+// only live in vmware-system-vks-public, and each must carry an addon-name label
+// matching the addon. Both were rejections on a real install.
+func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
+	const addonName = "bootstrap"
+	const nameLabel = "addon.kubernetes.vmware.com/addon-name"
+
 	for _, doc := range renderedDocs(t) {
 		kind := doc["kind"].(string)
 		meta := doc["metadata"].(map[string]any)
 
-		if ns, _ := meta["namespace"].(string); ns != testNamespace {
-			t.Errorf("%s is created in namespace %q, want the service's own namespace %q", kind, ns, testNamespace)
+		if ns, _ := meta["namespace"].(string); ns != addonNamespace {
+			t.Errorf("%s is created in namespace %q, want %q", kind, ns, addonNamespace)
+		}
+
+		labels, _ := meta["labels"].(map[string]any)
+		if got, _ := labels[nameLabel].(string); got != addonName {
+			t.Errorf("%s has %s = %q, want %q", kind, nameLabel, got, addonName)
 		}
 
 		if kind != "AddonRelease" {
@@ -250,8 +259,8 @@ func TestAddonResourcesLandInServiceNamespace(t *testing.T) {
 		spec := doc["spec"].(map[string]any)
 		for _, ref := range []string{"addonRef", "addonConfigDefinitionRef"} {
 			ns, _ := spec[ref].(map[string]any)["namespace"].(string)
-			if ns != testNamespace {
-				t.Errorf("AddonRelease.spec.%s.namespace = %q, want %q; unset falls back to the public namespace", ref, ns, testNamespace)
+			if ns != addonNamespace {
+				t.Errorf("AddonRelease.spec.%s.namespace = %q, want %q", ref, ns, addonNamespace)
 			}
 		}
 	}

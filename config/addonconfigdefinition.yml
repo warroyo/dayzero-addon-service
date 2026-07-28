@@ -1,4 +1,5 @@
-#@ load("helpers.star", "addon_namespace", "acd_name")
+#@ load("@ytt:data", "data")
+#@ load("helpers.star", "acd_name")
 
 #! Everything inside a `template:` block is Go template + sprig, evaluated per cluster
 #! by the addon controller, and is the resource BODY only - apiVersion, kind and
@@ -9,7 +10,9 @@ apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonConfigDefinition
 metadata:
   name: #@ acd_name()
-  namespace: #@ addon_namespace()
+  namespace: #@ data.values.addon_namespace
+  labels:
+    addon.kubernetes.vmware.com/addon-name: #@ data.values.addon_name
 spec:
   #! Reads the optional payload ConfigMap from the cluster's Supervisor namespace.
   #! Supervisor-side rights only, not guest-cluster rights.

@@ -18,12 +18,19 @@ Installing this Supervisor Service is therefore one of only two routes that exis
 the only one that keeps the addon package-free. See
 [Alternatives rejected](#alternatives-rejected).
 
-Which namespace the three CRs land in is a separate question, and the answer is not the
-public catalog. `vmware-system-vks-public` is closed to a Supervisor Service's deployer
-account too. This service creates them in the namespace the Supervisor deploys it into,
-which its deployer account owns. Tenants reach them from their own namespace through
-`AddonInstall.spec.addonRef.namespace`. Unset, that field falls back to the public
-catalog.
+They also have to live in `vmware-system-vks-public`. The namespace is not a choice:
+`addon.validating.vmware.com` rejects anything else outright.
+
+```
+admission webhook "addon.validating.vmware.com" denied the request:
+Addon.addons.kubernetes.vmware.com "bootstrap" is invalid:
+- metadata.namespace: Unsupported value: "svc-bootstrap-addon-svr31":
+  supported values: "vmware-system-vks-public"
+```
+
+So the Supervisor Service writes into a namespace it does not own. Whether its deployer
+account is allowed to is the open question this project turns on. See
+[`verify.md`](./verify.md) step 2.
 
 So a one-time admin install permanently delegates "seed my workload cluster with
 arbitrary YAML" to tenants, with:
@@ -77,9 +84,9 @@ Three shipped releases are built this way (`carvel-repo-1.0.0`,
 `addonConfigDefinitionRef` and `version`.
 
 Both refs carry an explicit namespace in `config/addonrelease.yml`.
-`addonConfigDefinitionRef.namespace` is required by the CRD;
-`addonRef.namespace` is optional and defaults to "the public namespace defined by the
-addon manager", which is not where this addon lives.
+`addonConfigDefinitionRef.namespace` is required by the CRD; `addonRef.namespace` is
+optional and defaults to "the public namespace defined by the addon manager", which is
+where this addon lives anyway, so it is set for symmetry rather than necessity.
 
 ## Output templates are the resource body only
 
@@ -191,9 +198,12 @@ document that follows a plain Kubernetes YAML format") as an alternative to
 ## Naming and placement conventions
 
 - `AddonConfigDefinition` names look like `ako.kubernetes.vmware.com.1.13.4+vmware.1-vks.1`
-- The shipped addon resources live in `vmware-system-vks-public`. This addon's live in
-  the service's own namespace, and tenants reach them through
-  `AddonInstall.spec.addonRef.namespace`
+- `Addon`, `AddonRelease` and `AddonConfigDefinition` all live in
+  `vmware-system-vks-public`, enforced by the validating webhook
+- Each of the three must carry the label
+  `addon.kubernetes.vmware.com/addon-name`, set to the addon name. The webhook rejects
+  the resource without it: "label addon.kubernetes.vmware.com/addon-name must be set to
+  match value". The CRD schemas say nothing about it, so `make test` pins it instead
 - `AddonConfig` must be named `<cluster-name>-<addon-name>` and created in the
   cluster's Supervisor namespace
 - `AddonConfig` requires the annotation
@@ -357,9 +367,9 @@ permitted to drive. Rejected, and not held in reserve, for two independent reaso
    Service. The Supervisor Service is meant to be the only external artifact this
    project requires. That constraint is part of the design rather than a convenience.
 
-The same constraint is why the addon CRs go in the service's own namespace. The
-deployer account owns it already, so there is no extra RBAC to grant, no
-escalation-prevention corner, and no second delivery mechanism.
+If the Supervisor Service's deployer account cannot write to
+`vmware-system-vks-public`, the answer is to ship the required RBAC inside the service
+(see [`verify.md`](./verify.md) step 2) rather than to add a delivery mechanism.
 
 ---
 

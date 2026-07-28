@@ -16,9 +16,9 @@ by the vSphere administrator, in any namespace. They come from a Supervisor Serv
 from an `AddonRepository` reconcile, and nowhere else. Tenants, meanwhile, can freely
 create `AddonInstall` and `AddonConfig` in their own vSphere namespace.
 
-This service registers its three CRs in the namespace it is installed into, since the
-public catalog namespace `vmware-system-vks-public` is closed even to it. Tenants point
-at them with `AddonInstall.spec.addonRef.namespace`.
+All three also have to live in `vmware-system-vks-public`, which the
+`addon.validating.vmware.com` webhook enforces, so this service writes into a namespace
+it does not own.
 
 So a one-time admin install of this service permanently delegates "seed my workload
 cluster with arbitrary YAML" to tenants, with no workload-cluster kubeconfig, no
@@ -54,7 +54,7 @@ Supervisor                          Workload cluster
 Addon                    ┌────────► Namespace           vks-bootstrap
 AddonRelease (no pkg)    │          ServiceAccount      vks-bootstrap
 AddonConfigDefinition ───┤          ClusterRoleBinding  vks-bootstrap
-  in the service's ns    └────────► App (kapp-controller)
+  in vks-public          └────────► App (kapp-controller)
 AddonInstall  ┐                       └── your YAML, applied
 AddonConfig   ┘ per tenant, in the cluster's ns
 ```
@@ -68,15 +68,11 @@ re-upload.
 2. In vCenter, go to **Workload Management → Services → Add Service** and upload it.
 3. Install it on the Supervisor.
 
-Confirm the addon registered, and note the namespace it landed in, because tenants
-need it:
+Confirm the addon registered:
 
 ```sh
-kubectl get addon,addonrelease,acd -A | grep bootstrap
+kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
 ```
-
-All three are in the service's own namespace, named like
-`svc-bootstrap-addon-domain-cNN`. It is stable for the life of the service.
 
 ### Air-gapped
 
@@ -95,9 +91,8 @@ and follow the steps above.
 Two objects per cluster, both in the cluster's own Supervisor namespace.
 
 First, attach the addon, once per namespace. See
-[`examples/addoninstall.yml`](examples/addoninstall.yml). Its `addonRef` must name the
-service's namespace from the install step; unset, it resolves to the public catalog
-namespace the addon is not in. Then label the clusters to seed:
+[`examples/addoninstall.yml`](examples/addoninstall.yml). Then label the clusters to
+seed:
 
 ```sh
 kubectl label cluster my-cluster addons.kubernetes.vmware.com/bootstrap=enabled
@@ -167,9 +162,9 @@ real controller is to build, upload and install the service. In its place the te
 all and accepts invalid enum values and invented fields. Server-side dry run hits the
 same RBAC wall as a real apply.
 
-`make render` takes `NAMESPACE=` to stand in for the value the Supervisor supplies at
-install time. It defaults to a placeholder, so a render without it still shows the
-shape of the CRs.
+The tests also pin what the CRD schemas do not cover: the namespace and the
+`addon.kubernetes.vmware.com/addon-name` label that `addon.validating.vmware.com`
+requires. Both were install-time rejections before they were tests.
 
 ### Releasing
 
@@ -184,11 +179,12 @@ Locally: `VERSION=1.0.0 make release`.
 
 ## Verifying
 
-Untested end to end. The open question is whether the addon controller resolves an
-addon outside `vmware-system-vks-public`. The API leaves room for it, since
-`addonRef.namespace` is a field and defaults to the public namespace only when unset,
-but no shipped addon exercises it, and the CRs cannot be created by hand to find out.
-Only an install answers it. Details in [`docs/verify.md`](docs/verify.md).
+Untested end to end. The open question is whether the Supervisor Service's generated
+deployer service account can write to `vmware-system-vks-public`, which the validating
+webhook makes the only permitted namespace for these three kinds. Its RBAC is neither
+listable nor impersonatable, so only an install answers it. If it cannot, the fix is to
+ship the required RBAC inside the service. Details in
+[`docs/verify.md`](docs/verify.md).
 
 ## Docs
 

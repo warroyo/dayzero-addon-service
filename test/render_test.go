@@ -41,15 +41,15 @@ type acd struct {
 	} `yaml:"spec"`
 }
 
-// testNamespace stands in for the namespace value the Supervisor supplies at install
-// time.
-const testNamespace = "svc-bootstrap-addon-domain-c0"
+// addonNamespace is the only namespace the addon.validating.vmware.com webhook accepts
+// for these three kinds.
+const addonNamespace = "vmware-system-vks-public"
 
 // renderConfig runs ytt over config/ exactly as the package build does.
 func renderConfig(t *testing.T) acd {
 	t.Helper()
 
-	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+testNamespace)
+	cmd := exec.Command("ytt", "-f", "../config")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
