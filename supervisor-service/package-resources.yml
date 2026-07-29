@@ -30,11 +30,11 @@ metadata:
 spec:
   displayName: Cluster Bootstrap YAML
   shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
-  longDescription: Registers a VKS addon that applies operator-supplied Kubernetes
-    YAML into a workload cluster as it is provisioned - namespaces, service accounts,
-    RBAC, resource quotas and other day-zero configuration. Tenants attach it with an
-    AddonInstall and supply the payload through an AddonConfig, with no workload
-    cluster kubeconfig, no Helm chart, no package repository and no container images.
+  longDescription: Installs the AddonRepository that registers a VKS addon for applying
+    operator-supplied Kubernetes YAML into a workload cluster as it is provisioned:
+    namespaces, service accounts, RBAC, resource quotas and other day-zero configuration.
+    Tenants attach it with an AddonInstall and supply the payload through an AddonConfig,
+    with no workload cluster kubeconfig and no artifact authored per payload.
   categories:
   - Configuration
   - Security

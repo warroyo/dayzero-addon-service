@@ -1,430 +1,169 @@
 # Design & API reference
 
-How the VKS addon API constrains this project, and why `config/` is shaped the way it
-is. Established against the Broadcom VKS API reference, the Carvel docs and a live
-Supervisor (VKS 3.7). Read this before touching `config/`.
+How the VKS addon API constrains this project and why the code is shaped the way it is.
+Established against the Broadcom VKS API reference, the Carvel docs, and a live Supervisor
+and guest cluster (VKS 3.7). Read this before touching `addon/`.
 
-## Why this exists
+For the package-free, fetch-free design this project originally aimed for, and why it is
+blocked today, see [`future-direct-creation.md`](./future-direct-creation.md).
 
-`AddonConfigDefinition`, `Addon` and `AddonRelease` cannot be created by hand.
-`kubectl auth can-i create … --all-namespaces` returns `no` even for
-`sso:Administrator@gpu.local`, and a direct apply into `vmware-system-vks-public`,
-where the shipped catalog lives, is rejected with `Forbidden`. They come from exactly
-two places: a Supervisor Service, or the controller reconciling an `AddonRepository`.
-An administrator can create `AddonRepository` and `AddonRepositoryInstall`; tenants can
-create `AddonInstall` and `AddonConfig` in their own vSphere namespace.
+## Why an AddonRepository
 
-Installing this Supervisor Service is therefore one of only two routes that exist, and
-the only one that keeps the addon package-free. See
-[Alternatives rejected](#alternatives-rejected).
+`Addon` and `AddonRelease` are owned by the VKS addon manager. Two validating webhooks,
+`addon.validating.vmware.com` and `addonrelease.validating.vmware.com`, reject every
+mutating operation on those kinds from any client that is not the manager's own service
+account. A service account with `create` RBAC on them is still denied at admission, and
+create, update, and both client-side and server-side apply all fail identically. The
+manager runs with `--enable-webhook-client-verification`, which is the caller-identity
+check behind this.
 
-An `Addon` is only valid in `vmware-system-vks-public`, and the package cannot write
-there. A Supervisor Service is deployed with the kapp namespace rewrite set, so every
-namespaced resource it applies lands in the service's own namespace,
-`svc-<service>-<id>`. An `AddonConfigDefinition` authored with `namespace:
-vmware-system-vks-public` was observed landing in `svc-bootstrap-addon-svr31` on a real
-install. `AddonConfigDefinition` and `AddonRelease` are accepted there; `Addon` is not.
+The `AddonConfigDefinition` is not locked, but it is inert on its own: an `AddonInstall`
+reaches an ACD only through a selected `AddonRelease`, and requires the `Addon` to
+reconcile at all. So authoring the ACD directly gets us nothing usable.
 
-Two things make the way through. The rewrite is a field on the App, not a property of
-deploying under a service account, so an App this package creates is free of it.
-Cluster-scoped resources are exempt from the rewrite, so the package can create RBAC
-anywhere. Putting those together, the package ships:
+The one route that makes the manager create all three is an `AddonRepository`. An
+administrator can create `AddonRepository` and `AddonRepositoryInstall` (verified), the
+manager reconciles them, and it materialises the `Addon`, `AddonRelease` and ACD in
+`vmware-system-vks-public`. That is the design.
 
-| Resource | Scope | Lands in |
-|---|---|---|
-| `ServiceAccount`, `Role`, `RoleBinding` | Namespace | the service namespace |
-| `ClusterRole`, `ClusterRoleBinding` | Cluster | cluster-wide |
-| `App` (kapp-controller) | Namespace | the service namespace |
+## The guest fetch is unavoidable
 
-The three addon CRs are not applied by the package at all. They live in
-`config/_ytt_lib/addon`, are rendered at build time and carried inline by the App, which
-runs under the service account and applies them into `vmware-system-vks-public`. That
-also settles their lifecycle: kapp-controller deletes an App's resources when the App
-goes away, so uninstalling the service removes the addon from the catalog. Nothing is
-orphaned, and no owner references or finalizers of our own are involved.
+An `AddonRepository` produces an `AddonRelease` with `spec.package` set, which makes the
+addon controller create a guest `PackageInstall`, and the guest acquires the package
+through a package repository that fetches a bundle. Every VKS addon works this way. So the
+guest pulls the addon-repository bundle, and no arrangement avoids it. This project does
+not try to; instead the bundle is config-only, so relocation for air-gap is trivial.
 
-Creating the `ClusterRole` is subject to Kubernetes escalation-prevention, so the
-deployer account has to hold those verbs already. See [`verify.md`](./verify.md) step 2.
+The guest fetch does not reach an arbitrary external registry directly. Guest image pulls
+route through an in-cluster proxy (`mgmt-image-proxy.kube-system.svc`, backed by the
+depot) that the Supervisor feeds. This is the VKS isolation model.
 
-So a one-time admin install permanently delegates "seed my workload cluster with
-arbitrary YAML" to tenants, with:
+## What ships: a package repository with the ACD in an annotation
 
-- no workload-cluster kubeconfig
-- no OCI registry
-- no Helm chart
-- no package repository
+The addon-repository bundle (`make bundle`) is a Carvel package repository containing one
+`Package` and its `PackageMetadata`. The `Package` carries our hand-written
+`AddonConfigDefinition` in its `addons.kubernetes.vmware.com/addon-config-definition`
+annotation as gzip+base64. This is exactly how the shipped cilium addon delivers its
+definition, and it is why our own ACD (schema, validation, output resources) survives the
+`AddonRepository` route intact. `make bundle` renders the ACD and encodes it into the
+annotation, so the ACD is edited as a readable file.
 
-Addons are built for exactly this job, but essentially every shipped addon drags in
-images, charts, or repositories. This one is pure data.
+The `Package` also declares `kubernetesVersionSelection.constraints`, which lands on the
+generated `AddonRelease`.
 
-What tenants actually seed is the day-zero state of a cluster: namespaces, service
-accounts, RBAC bindings to SSO groups, resource quotas, default network policies,
-pull secrets. Ordinary configuration that otherwise arrives by handing someone a
-workload-cluster kubeconfig.
+## How the payload reaches the guest
 
-Timing matters as much as the mechanism. The addon runs from the Supervisor during
-provisioning, before the cluster is reachable by anything external, so the payload is
-in place before anyone or anything else touches the cluster.
+The tenant payload flows as data, in three hops:
 
-### Security posture
+1. A tenant writes resources in `AddonConfig.spec.values` (`resources`, `resourcesYaml`,
+   or a `<cluster>-bootstrap` ConfigMap).
+2. The ACD's output template renders those into a values `Secret`. The addon controller
+   wires that Secret into the guest `PackageInstall` as its values.
+3. The package's ytt reads the values and emits the resources; kapp applies them.
 
-Arbitrary YAML applied with a `cluster-admin` binding is not an escalation under this
-model. The tenant already owns that workload cluster; this gives them no more than a
-kubeconfig would, minus the kubeconfig. The residual exposure is a vSphere namespace
-containing users who should not have workload-cluster admin, which is why
-`clusterRoleName` stays configurable.
+The Secret is the standard mechanism: the shipped cilium ACD emits a
+`<cluster>-cilium-data-values` Secret the same way, with `referenceType: ValuesRef` on
+the Supervisor side and a plain copy in the guest package namespace. This project mirrors
+that shape exactly, since the ACD-to-PackageInstall wiring is addon-controller internals
+that can only be fully exercised on a real install.
 
-### Scope boundary: seeding, not installing
+### Encoding the payload
 
-The "no images" property holds only while payloads are pure config: `Application`s,
-`Secret`s, `Namespace`s, CRs. Real workloads mean images, registries and air-gap
-concerns, and belong in a Carvel package instead. This is a seeding mechanism.
+Arbitrary YAML cannot be passed through ytt data values naively, because ytt interprets
+`#@`. So the ACD encodes the payload and the package decodes it:
 
----
+- `resources` (a structured list) becomes a JSON string, `resourcesJson`, via
+  `toJson | toJson`. The package runs `json.decode` and emits each item.
+- `resourcesYaml` (a raw multi-document string) and any ConfigMap data are passed as a
+  single string, JSON-encoded so newlines and colons survive. The package splits on the
+  document separator and `yaml.decode`s each.
 
-## Package-free addons are legal
-
-Without this the approach would not work at all.
-
-> "Specifies Carvel package ref name and version; **unset means no package deployed**"
-
-> "An AddonRelease should have package and/or definitionRef set."
-
-An `AddonRelease` carrying only `addonConfigDefinitionRef` is a first-class,
-package-free addon. No `AddonRepository` or `AddonRepositoryInstall` wiring is needed
-either, because the Supervisor Service lays down `Addon` and `AddonRelease` directly.
-Three shipped releases are built this way (`carvel-repo-1.0.0`,
-`depot.kube-system.svc-1.0.0` and `helm-repo-1.0.0`), each carrying only `addonRef`,
-`addonConfigDefinitionRef` and `version`.
-
-Both refs carry an explicit namespace in `config/addonrelease.yml`, and both must name
-the `AddonRelease`'s own namespace. The webhook enforces it:
-
-```
-- spec.addonRef.namespace: Invalid value: "vmware-system-vks-public":
-  AddonRelease and referenced Addon must be in the same namespace
-- spec.definitionRef: no matching AddonConfigDefinition resource found
-```
-
-`addonRef.namespace` is optional in the CRD and defaults to the public addon catalog,
-which is not where this addon lives, so leaving it unset would fail the same way.
+`test/render_test.go` renders this whole chain and asserts a payload comes back out as
+the resources it went in as. The guest-side half was also validated directly: a
+`PackageInstall` pointing at an inline package with this exact render turned per-cluster
+values into the expected resources.
 
 ## Output templates are the resource body only
 
-This constrains the design more than anything else in the API.
+The single most constraining API rule, and the reason the payload is encoded rather than
+templated in place:
 
-> "template defines the Kubernetes resource template for output manifest generation.
-> **This field only needs the resource specification (excluding TypeMeta and
-> ObjectMeta) as the GVK, Name, and Namespace are already handled**..."
+> "template defines the Kubernetes resource template for output manifest generation. This
+> field only needs the resource specification (excluding TypeMeta and ObjectMeta) as the
+> GVK, Name, and Namespace are already handled."
 
-Consequences:
-
-- The template must not contain `apiVersion`, `kind`, or `metadata`.
-- One resource per output entry. Multi-document YAML is out.
-- `apiVersion` and `kind` on `targetClusterOutput` are static literals. The template
-  structurally cannot override them, because it excludes TypeMeta. This is the reason
-  the [App relay](#the-app-relay) exists.
-- Body shape varies by kind: `ClusterRoleBinding` takes a top-level `roleRef` and
-  `subjects`, `ConfigMap` takes `data`, `Namespace` and `ServiceAccount` are
-  effectively empty.
-
-`name` and `namespace` on an output *are* templatable. The shipped cilium definition
-uses `'{{.Cluster.name}}-cilium-data-values'`, external-secrets uses
-`'{{.Cluster.name}}-{{.Addon.name}}-values'`, and under `renderForEach` the name comes
-from `'{{.ForEach.CurrentDependency…}}'`. Only the GVK is fixed.
-
-`referenceType` is ignored unless the kind is `Secret`. Verbatim from the CRD: "if the
-kind is not a secret, then the referenceType will be ignored." Every shipped
-non-`Secret` target output leaves it at the `ValuesRef` default and is still applied
-directly into the guest; `vks-static`'s `PriorityClass` and `depot`'s `Service` both
-exist in live workload clusters.
-
-## kapp-controller needs no OCI artifact
-
-kapp-controller does not require an imgpkg bundle. `imgpkgBundle` is one of six
-`spec.fetch` types (`inline`, `image`, `imgpkgBundle`, `http`, `git`, `helmChart`), and
-`inline` (v0.31.0 and later) carries content in the CR itself:
-
-```yaml
-- inline:
-    paths:
-      dir/file.ext: file-content
-    pathsFrom:
-    - configMapRef: {name: cfgmap-name, directoryPath: dir}
-    - secretRef:    {name: secret-name, directoryPath: dir}
-```
-
-`PackageInstall` to `Package` to `fetch.imgpkgBundle` is the packaging layer; `App` is
-the primitive beneath it. Emitting a bare `App` gets kapp-controller's
-apply/prune/GC/status engine with no package to author and no registry to reach.
-
-Two constraints on the `App` this addon emits:
-
-- `spec.template` is required. "Template must have one or more directives." The
-  available directives are `ytt`, `kbld`, `helmTemplate`, `cue` and `sops`.
-- `spec.serviceAccountName` is documented as optional, but the App needs some
-  credential: either a SA in its own namespace or `spec.cluster` with a kubeconfig
-  secret.
-
-kapp-controller is present in every VKS cluster. `apps.kappctrl.k14s.io` is registered
-and a `kapp-controller` deployment runs in `tkg-system`, documented as a
-system/bootstrap package (VKS 3.5 and later, "automatically installed, does not need
-migration").
-
-> The one imgpkg bundle in this project is for the Supervisor Service itself, which
-> vCenter requires. It is unrelated to, and never consumed by, the guest cluster.
-
-## Supervisor Service definition format
-
-A Supervisor Service YAML uploaded to vCenter is a two-document Carvel manifest. The
-shape below matches a shipped service, `sre-supervisor-role`, whose only job is
-installing RBAC YAML. That is the closest prior art to this project:
-
-```yaml
-apiVersion: data.packaging.carvel.dev/v1alpha1
-kind: PackageMetadata
-metadata: {name: sre-supervisor-role.fling.vsphere.vmware.com}
-spec:
-  displayName: Supervisor Troubleshooting Access
-  providerName: Broadcom Inc.
-  shortDescription: ...
-  longDescription: ...
-  maintainers: [{name: ...}]
-  categories: [CI/CD, GitOps]
-  iconSVGBase64: none
----
-apiVersion: data.packaging.carvel.dev/v1alpha1
-kind: Package
-metadata: {name: sre-supervisor-role.fling.vsphere.vmware.com.1.0.1}
-spec:
-  refName: sre-supervisor-role.fling.vsphere.vmware.com
-  version: 1.0.1
-  releasedAt: "2026-02-24T16:05:21Z"
-  template:
-    spec:
-      fetch:    [{imgpkgBundle: {image: <registry>/<path>@sha256:...}}]
-      template: [{ytt: {paths: [./config]}}, {kbld: {paths: ['-', .imgpkg/images.yml]}}]
-      deploy:   [{kapp: {}}]
-  valuesSchema:
-    openAPIv3:
-      properties: {...}
-```
-
-Uploaded via **Supervisor Management → Services → Add New Service → Upload**.
-
-vCenter also documents a `CUSTOM_YAML` service-definition format ("inline YAML
-document that follows a plain Kubernetes YAML format") as an alternative to
-`CARVEL_APPS_YAML`, but no public example exists. Not pursued.
-
-## Naming and placement conventions
-
-- `AddonConfigDefinition` names look like `ako.kubernetes.vmware.com.1.13.4+vmware.1-vks.1`
-- Every addon lives in `vmware-system-vks-public`, this one included. An `AddonRelease`
-  must be in the same namespace as the `Addon` its `addonRef` names, and its
-  `definitionRef` resolves in that namespace too
-- Each of the three must carry the label
-  `addon.kubernetes.vmware.com/addon-name`, set to the addon name. The webhook rejects
-  the resource without it: "label addon.kubernetes.vmware.com/addon-name must be set to
-  match value". The CRD schemas say nothing about it, so `make test` pins it instead
-- The shipped `carvel-repo` and `helm-repo` addons also carry
-  `addon.kubernetes.vmware.com/addon-namespace`, naming their own namespace, so this
-  addon sets it too. `depot.kube-system.svc` does not have it, so it is not universally
-  required
-- `AddonConfig` must be named `<cluster-name>-<addon-name>` and created in the
-  cluster's Supervisor namespace
-- `AddonConfig` requires the annotation
-  `clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"`. Without it
-  the `AddonConfig` survives `ClusterAddon` deletion
-
-A shipped `AddonInstall`, for reference:
-
-```yaml
-apiVersion: addons.kubernetes.vmware.com/v1alpha1
-kind: AddonInstall
-metadata: {name: vks-cilium01-cilium, namespace: test-ns}
-spec:
-  addonRef: {name: cilium}
-  clusters:
-  - selector: {matchLabels: {cluster.x-k8s.io/cluster-name: vks-cilium01}}
-    constraints:
-      expression: "cluster.cniRefName() == 'cilium' && version_in_range(cluster.spec.topology.version, '>=1.35.0')"
-  stopMatchingBehavior: Retain
-```
-
----
+So an output template must not contain `apiVersion`, `kind`, or `metadata`, and it is one
+resource per output entry. `name` and `namespace` are templatable (this project uses
+`{{.Cluster.name}}-bootstrap-data-values`), but the GVK is a static literal. That is why
+the addon cannot emit arbitrary payload kinds directly, and why the package renders them
+instead.
 
 ## The template dialect
 
-The dialect is undocumented; what follows is read off shipped definitions. It is Go
-`text/template` plus sprig, not CEL. The CRD's own field description claims CEL
-(`${values.arguments.paused}`), but that doc string is stale and the shipped
-definitions are authoritative.
-
-Context roots:
-
-| Root | Contents |
-|---|---|
-| `.Values.<field>` | This definition's schema, populated from `AddonConfig.spec.values`. Capital V |
-| `.Dependencies.<inputName>` | A resolved `templateInputResource`, as the whole object |
-| `.Cluster.name` | The consuming cluster |
-| `.Addon.name` | The addon |
-| `.ForEach.CurrentDependency` | Current item, inside a `renderForEach` output |
-
-Functions in use across shipped definitions: `list`, `append`, `contains`, `index`,
-`toYaml`, `indent`, `fail`, `b64enc`, `hasKey`, `default`, `quote`, `ne`, `and`, plus
-Go 1.18's `break`. That is sprig, with the caveat that `toYaml` is not a sprig
-function. It is a Helm addition, and the controller registers it the same way (the
-shipped external-secrets definition depends on it). VMware also registers at least one
-custom function, `getRegistryAuth`, used by the shipped helm-repo definition. `toJson`
-is therefore safe to rely on. `test/render_test.go` reproduces this function map so
-template bugs surface locally.
-
-There is no helm field on an `AddonConfigDefinition`. `spec` has exactly four keys:
-`addonInstallPermission`, `schema`, `templateInputResources`,
-`templateOutputResources`. The Helm resemblance is only the sprig function set inside
-`template`. There is no chart engine, no multi-document output, no `_helpers.tpl` and
-no `.Files`, so it does nothing to relax the static-GVK constraint above.
-
-`AddonRelease.spec.kubernetesVersionConstraints` is a plain semver range string. Live
-values: `>=1.35.0 <1.36.0`, `=1.35.5+vmware.1-vkr.1`, `>=1.32.0`.
+The output templates are Go `text/template` plus sprig, evaluated per cluster by the addon
+controller (not CEL, despite a stale CRD field description). Context roots are `.Values`
+(the AddonConfig values, capital V), `.Dependencies.<inputName>` (a resolved
+`templateInputResource`), `.Cluster` and `.Addon`. `toJson` is sprig; `toYaml` is a Helm
+addition the controller also registers. `test/render_test.go` reproduces this function map
+so template bugs surface locally.
 
 ## RBAC and where `addonInstallPermission` applies
 
-Emitting a `ClusterRoleBinding` to `cluster-admin` in the guest is not blocked by
-escalation-prevention. The shipped `vks-static-v1.34.8---vmware.1-vkr.1-def` emits
-exactly that shape: a `rbac.authorization.k8s.io/v1/ClusterRoleBinding` target output
-binding `vks:apiserver-kubelet-client` to `system:kubelet-api-admin`.
+`spec.addonInstallPermission.accessPolicies` grants rights in the Supervisor namespace, for
+reading `templateInputResources` and writing the output Secret, not in the guest. This
+definition declares `get`/`list`/`watch` on configmaps (the optional payload ConfigMap)
+and full access to secrets (the output values Secret), matching the shipped cilium ACD.
 
-`spec.addonInstallPermission.accessPolicies` grants RBAC in the Supervisor namespace,
-for reading `templateInputResources` and writing a `supervisorNamespaceOutput`, not in
-the guest cluster. `vks-static` declares none at all yet writes cluster-scoped guest
-resources. This definition declares only `get`/`list`/`watch` on `configmaps`, for the
-optional payload ConfigMap.
+The payload itself is applied in the guest by the addon system's `PackageInstall` identity,
+which is privileged enough to install cluster addons. This project does not control that
+identity, so the payload applies with the addon system's rights. This is the one place the
+native design gives up a knob the App-relay alternative had (a configurable ClusterRole);
+see [Alternatives rejected](#alternatives-rejected).
 
-## How packaged addons get their definition
+## Naming and placement conventions
 
-The shipped addons arrive through a route this project does not use. A Carvel
-`Package` carries the entire definition as a gzip+base64 annotation,
-`addons.kubernetes.vmware.com/addon-config-definition`, alongside
-`addon.kubernetes.vmware.com/addon-name` and
-`addons.kubernetes.vmware.com/upgrade-strategy`. Decoding cilium's yields its
-definition verbatim. The controller materialises `Addon`, `AddonRelease` and
-`AddonConfigDefinition` from it.
-
-A `Package`-derived `AddonRelease` gets `spec.package` set, forcing a real Carvel
-package and a guest-side `PackageInstall`, and it means publishing and maintaining an
-addon repository on top of the Supervisor Service. See
-[Alternatives rejected](#alternatives-rejected).
-
----
-
-## The App relay
-
-Because GVK is structurally static, the definition emits a small fixed set of
-known-GVK resources into the guest cluster. The last of them is an `App` carrying the
-tenant's arbitrary YAML inline, and kapp-controller applies whatever is inside.
-
-| # | GVK | Scope | Purpose |
-|---|-----|-------|---------|
-| 1 | `v1/Namespace` | Cluster | Holds the App and its SA |
-| 2 | `v1/ServiceAccount` | Namespace | Identity kapp-controller applies with |
-| 3 | `rbac.authorization.k8s.io/v1/ClusterRoleBinding` | Cluster | Binds SA to a configurable ClusterRole |
-| 4 | `kappctrl.k14s.io/v1alpha1/App` | Namespace | Carries payload, does the applying |
-
-None set `referenceType`, since it is ignored for every kind but `Secret`.
-
-All four are named `vks-bootstrap`. Names could be templated, but there is nothing
-per-cluster to encode, because each cluster gets its own copy inside its own cluster.
-Keeping them literal also avoids interleaving ytt substitution with the Go templates
-the addon controller evaluates later.
-
-Payload values are JSON-encoded into the `App`'s inline paths rather than indented in.
-A JSON string is a valid YAML scalar, so arbitrary multi-line YAML embeds with no
-indentation arithmetic and no sensitivity to odd whitespace in the payload.
-
-The relay buys any GVK, any resource count, pruning and GC on change, deletion on
-removal, retry with backoff, and a real status object to debug against.
-
----
+- `Addon`, `AddonRelease` and `AddonConfigDefinition` all live in
+  `vmware-system-vks-public`. The manager places them there.
+- Each must carry `addon.kubernetes.vmware.com/addon-name` (the addon name); the shipped
+  addons also carry `addon.kubernetes.vmware.com/addon-namespace`. The validating webhook
+  rejects the resources without the name label. The CRD schemas do not cover this, so
+  `make test` pins it.
+- An `AddonRepository` must carry the `addons.kubernetes.vmware.com/package-offerings`
+  annotation (a JSON listing of the packages it offers), or the webhook rejects it.
+- `AddonConfig` must be named `<cluster-name>-<addon-name>` and created in the cluster's
+  Supervisor namespace, with the `owned-for-deletion` annotation so it is garbage
+  collected with the `ClusterAddon`.
 
 ## Alternatives rejected
 
-**Fixed set of output kinds.** Declare outputs for exactly the kinds worth caring about
-(Namespace, Secret, Application, ConfigMap). Fully native, no kapp-controller, no
-extra in-cluster object. Rejected because any unanticipated kind requires a platform
-admin to version the definition and reinstall the service, which puts the admin back in
-the loop and destroys the delegation this exists for.
+**Direct creation by a Supervisor Service.** Have the service create the `Addon`,
+`AddonRelease` and ACD itself, package-free, with an inline App delivering the payload to
+the guest with no fetch. This is the ideal, and it is blocked only by the manager-only
+webhooks. Documented in full in
+[`future-direct-creation.md`](./future-direct-creation.md), kept because the block is a
+platform policy that could change.
 
-**`renderForEach` over label-selected ConfigMaps.** Iterates inputs with a `multiple`
-constraint, but still cannot vary output GVK. Dead end for generic YAML.
+**A helm AddonRepository.** `AddonRepository.spec.fetch` also accepts a `helmRepository`,
+and a helm-derived addon is package-free on the `AddonRelease`. Rejected because the
+manager generates the ACD from the chart with a fixed `helmValues`/`helmOptions` schema,
+so our own definition and tenant API are lost, and it drags in helm-controller as a
+required addon. The imgpkg route keeps our ACD and runs on kapp-controller alone.
 
-**CAPI `ClusterResourceSet`.** Would have meant zero guest-cluster footprint and no
-kapp-controller dependency. Out of scope for this project.
+**The App-relay with a stub package.** Keep the ACD emitting a Namespace, ServiceAccount,
+ClusterRoleBinding and an inline App carrying the payload, with the forced package as a
+no-op stub. Keeps a configurable `clusterRoleName`. Rejected as not minimal: it leaves two
+guest-side mechanisms (a do-nothing PackageInstall next to the App) where the native
+package does the whole job with one. The `clusterRoleName` knob is the cost of that
+simplification.
 
-**VKS pre-created objects.** VKS picks up certain objects pre-created in the vSphere
-namespace during provisioning (`kapp-controller-package` is the documented example).
-Scoped to specific CRs the TKR controller recognises, and it does not accept arbitrary
-YAML, so it is not a substitute.
-
-**Ship the three CRs as plain YAML, no bundle.** The shipped `carvel-repo`, `depot`
-and `helm-repo` triples have no package and no `ownerReferences` to any Carvel
-`Package`, so they look like plain CRs, and the Supervisor already runs an Argo CD
-instance that manages every `AddonConfig` in the tenant namespaces. Delivering the
-addon the same way would take the dependency count to literal zero. It is not possible:
-those three kinds come only from a Supervisor Service or an `AddonRepository`
-reconcile, in any namespace. Which namespace they land in does not change that.
-
-**`AddonRepository` pointing at a Helm repository.** `AddonRepository.spec.fetch`
-accepts `helmRepository: {url}` as well as `imgpkgBundle`. A live example points at
-`https://charts.external-secrets.io`, and the controller auto-generates the `Addon`,
-`AddonRelease` (with `dependsOn: helm-controller`) and `AddonConfigDefinition` from
-the chart with no authoring at all. "Install any Helm chart as a VKS addon" is a solved
-problem, but it needs a chart, which reintroduces exactly the per-payload artifact this
-project exists to eliminate.
-
-**`AddonRepository` pointing at an imgpkg bundle.** The other route an administrator is
-permitted to drive. Rejected, and not held in reserve, for two independent reasons:
-
-1. A `Package`-derived `AddonRelease` carries `spec.package`, which forces a Carvel
-   package and a guest-side `PackageInstall`. The package-free property is the whole
-   premise.
-2. It adds a second external artifact: a published addon repository that has to be
-   built, hosted, versioned and relocated for air-gap, alongside the Supervisor
-   Service. The Supervisor Service is meant to be the only external artifact this
-   project requires. That constraint is part of the design rather than a convenience.
-
-The namespace rewrite is why the package hands the addon CRs to an App instead of
-applying them: the rewrite is set on the App the Supervisor creates for the service, and
-an App the package creates for itself does not carry it.
-
----
-
-## Dependencies
-
-The claim is provisioning-time seeding with no per-payload artifacts, not zero
-dependencies. What remains:
-
-1. One imgpkg bundle, the Supervisor Service itself. The OCI dependency moves from
-   per-payload to once, ever. That is a large reduction rather than zero, and no route
-   avoids it, because the "plain CRs" alternative is closed by RBAC.
-2. kapp-controller, in-guest, pre-existing and VMware-managed. Its presence is a VKS
-   implementation detail rather than a contract. The design dodges Carvel *packaging*
-   by leaning on the Carvel *runtime*.
-3. An undocumented template dialect, mapped above and covered by tests, but still
-   addon-controller internals that may shift across VKS versions. The tests encode an
-   understanding of it, not a contract.
-
-What genuinely is dependency-free: no package to author, version and publish per
-payload; no container images, so the `ImagesLock` is empty and air-gap relocation is
-trivial; no `AddonRepository` wiring.
-
----
+**ytt in the payload.** Let tenants supply ytt rather than plain YAML. Rejected: the
+`AddonConfig` is already per-cluster, so per-cluster variation needs no templating. ytt
+would only add value for patching a base the addon ships, which is a different product
+than a generic seeder.
 
 ## Sources
 
 - [VKS API reference](https://developer.broadcom.com/xapis/vmware-vsphere-kubernetes-service/latest/api-docs.html)
 - [Managing Add-ons in VKS Clusters](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/managing-add-ons-in-vks-clusters.html)
-- [Configure an Add-on at Installation Time](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/managing-add-ons-in-vks-clusters/configure-an-add-on-at-installation-time.html)
 - [kapp-controller App CR spec](https://carvel.dev/kapp-controller/docs/v0.50.x/app-spec/)
-- [vsphere-tmm/Supervisor-Services](https://vsphere-tmm.github.io/Supervisor-Services/), real service definition YAML
 - [Leveraging Cilium CNI on vSphere VKS Clusters](https://medium.com/@bob-bauer/leveraging-cilium-cni-on-vsphere-vks-clusters-9070ab70c309), real AddonInstall and AddonConfig examples

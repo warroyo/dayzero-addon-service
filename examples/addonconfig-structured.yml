@@ -13,9 +13,6 @@ metadata:
 spec:
   clusterName: my-cluster
   values:
-    # Narrow the rights the payload is applied with. Defaults to cluster-admin.
-    clusterRoleName: cluster-admin
-
     resources:
     - apiVersion: v1
       kind: Namespace

@@ -1,0 +1,11 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:json", "json")
+#@ load("@ytt:yaml", "yaml")
+#@ for r in json.decode(data.values.resourcesJson):
+--- #@ r
+#@ end
+#@ for doc in data.values.resourcesYaml.split("\n---\n"):
+#@ if doc.strip() != "":
+--- #@ yaml.decode(doc)
+#@ end
+#@ end

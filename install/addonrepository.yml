@@ -1,0 +1,39 @@
+# Install method 1: admin applies these two resources directly.
+#
+# The addon manager reconciles the AddonRepository, fetches the published addon-repo
+# bundle, and materialises the Addon, AddonRelease and AddonConfigDefinition in
+# vmware-system-vks-public. Tenants then attach the addon per cluster (see examples/).
+#
+# Point imageURL at wherever you published the bundle (`make push`), and keep the
+# version and package-offerings annotation in step with it.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepository
+metadata:
+  name: bootstrap-addon-repo
+  namespace: vmware-system-vks-public
+  annotations:
+    # Required by addonrepositories.validating.vmware.com. Must list the packages the
+    # bundle actually offers.
+    addons.kubernetes.vmware.com/package-offerings: |
+      {
+        "repositoryVersion": "1.0.0",
+        "packages": {
+          "bootstrap.kubernetes.vmware.com": { "versions": ["1.0.0"] }
+        }
+      }
+spec:
+  fetch:
+    imgpkgBundle:
+      imageURL: ghcr.io/warroyo/bootstrap-addon-repo:1.0.0
+  targetRepositoryName: bootstrap-addon-repo
+  version: 1.0.0
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepositoryInstall
+metadata:
+  name: bootstrap-addon-repo-install
+  namespace: vmware-system-vks-public
+spec:
+  addonRepositoryRef:
+    name: bootstrap-addon-repo
+    namespace: vmware-system-vks-public

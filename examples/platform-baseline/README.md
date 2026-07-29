@@ -63,10 +63,10 @@ On the Supervisor, template rendering failures show up here:
 kubectl -n my-namespace get clusteraddon my-cluster-bootstrap -o yaml
 ```
 
-In the workload cluster, the apply log is on the `App`:
+In the workload cluster, the apply log is on the guest `PackageInstall`:
 
 ```sh
-kubectl -n vks-bootstrap get app vks-bootstrap -o yaml   # status.deploy.stdout
+kubectl -n vmware-system-tkg get pkgi my-cluster-bootstrap -o yaml   # status.usefulErrorMessage
 kubectl get ns team-a
 kubectl -n team-a get sa,rolebinding,resourcequota
 ```

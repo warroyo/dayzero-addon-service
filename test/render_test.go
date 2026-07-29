@@ -1,13 +1,16 @@
-// Package test renders the AddonConfigDefinition's Go templates the way the VKS
-// addon controller does, so template bugs surface here instead of after a vCenter
-// upload. The kinds involved cannot be applied by hand, so build-upload-install is
-// otherwise the only loop. See docs/verify.md.
+// Package test renders the AddonConfigDefinition's Go templates the way the VKS addon
+// controller does, and the package's ytt the way the guest kapp-controller does, so a
+// break in either surfaces here instead of after a bundle is published. The addon
+// controller only reports template errors per cluster, well after install; see
+// docs/verify.md.
 package test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"text/template"
@@ -16,70 +19,69 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type outputTarget struct {
+	APIVersion    string `yaml:"apiVersion"`
+	Kind          string `yaml:"kind"`
+	Name          string `yaml:"name"`
+	Namespace     string `yaml:"namespace"`
+	ReferenceType string `yaml:"referenceType"`
+}
+
 type outputResource struct {
-	TargetClusterOutput struct {
-		APIVersion string `yaml:"apiVersion"`
-		Kind       string `yaml:"kind"`
-		Name       string `yaml:"name"`
-		Namespace  string `yaml:"namespace"`
-		Scope      string `yaml:"scope"`
-	} `yaml:"targetClusterOutput"`
-	Template string `yaml:"template"`
+	SupervisorNamespaceOutput *outputTarget `yaml:"supervisorNamespaceOutput"`
+	TargetClusterOutput       *outputTarget `yaml:"targetClusterOutput"`
+	Template                  string        `yaml:"template"`
+}
+
+func (o outputResource) target() outputTarget {
+	if o.SupervisorNamespaceOutput != nil {
+		return *o.SupervisorNamespaceOutput
+	}
+	if o.TargetClusterOutput != nil {
+		return *o.TargetClusterOutput
+	}
+	return outputTarget{}
 }
 
 type acd struct {
 	Kind string `yaml:"kind"`
 	Spec struct {
-		Schema struct {
-			OpenAPIV3Schema struct {
-				Properties map[string]struct {
-					Default any `yaml:"default"`
-				} `yaml:"properties"`
-			} `yaml:"openAPIV3Schema"`
-		} `yaml:"schema"`
 		TemplateOutputResources []outputResource `yaml:"templateOutputResources"`
 	} `yaml:"spec"`
 }
 
-// renderConfig returns the AddonConfigDefinition the App carries inline.
-func renderConfig(t *testing.T) acd {
+// yttRender runs ytt over the given args and returns stdout.
+func yttRender(t *testing.T, args ...string) []byte {
 	t.Helper()
-
-	dec := yaml.NewDecoder(bytes.NewReader(inlineAddonYAML(t)))
-	for {
-		var doc acd
-		if err := dec.Decode(&doc); err != nil {
-			break
-		}
-		if doc.Kind == "AddonConfigDefinition" {
-			return doc
-		}
+	cmd := exec.Command("ytt", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ytt %s failed: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
-	t.Fatal("no AddonConfigDefinition in the App's inline paths")
-	return acd{}
+	return stdout.Bytes()
 }
 
-// schemaDefaults mirrors the defaulting the API server applies to AddonConfig.spec.values
-// from the AddonConfigDefinition's openAPIV3Schema before the controller templates it.
-func schemaDefaults(a acd) map[string]any {
-	values := map[string]any{}
-	for name, prop := range a.Spec.Schema.OpenAPIV3Schema.Properties {
-		if prop.Default != nil {
-			values[name] = prop.Default
-		}
+// renderACD renders addon/addonconfigdefinition.yml with ytt, the way `make bundle` does
+// before encoding it into the Package annotation.
+func renderACD(t *testing.T) acd {
+	t.Helper()
+	out := yttRender(t, "-f", "../addon/addonconfigdefinition.yml", "-f", "../addon/values.yml")
+	var doc acd
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("rendered ACD is not valid YAML: %v", err)
 	}
-	return values
+	if doc.Kind != "AddonConfigDefinition" {
+		t.Fatalf("expected an AddonConfigDefinition, got %q", doc.Kind)
+	}
+	return doc
 }
 
 // controllerFuncs approximates the function map the VKS addon controller exposes to
-// AddonConfigDefinition templates. It is sprig plus the Helm-style YAML helpers:
-// toYaml is not part of sprig, but the shipped external-secrets AddonConfigDefinition
-// uses it, so the controller clearly registers it the way Helm does. The controller
-// also registers at least one VMware-specific function (getRegistryAuth, used by the
-// shipped helm-repo definition) which this project does not rely on.
+// AddonConfigDefinition templates: sprig plus the Helm-style toYaml/fromYaml. toJson is
+// part of sprig and is what this definition relies on.
 func controllerFuncs() template.FuncMap {
 	funcs := sprig.TxtFuncMap()
-
 	funcs["toYaml"] = func(v any) string {
 		data, err := yaml.Marshal(v)
 		if err != nil {
@@ -87,32 +89,23 @@ func controllerFuncs() template.FuncMap {
 		}
 		return strings.TrimSuffix(string(data), "\n")
 	}
-	funcs["fromYaml"] = func(s string) map[string]any {
-		out := map[string]any{}
-		_ = yaml.Unmarshal([]byte(s), &out)
-		return out
-	}
-
 	return funcs
 }
 
-// render evaluates one output's template with the context roots the addon controller
-// provides: .Values, .Dependencies, .Cluster and .Addon.
-func render(t *testing.T, tmpl string, values, deps map[string]any) string {
+// renderTemplate evaluates one output's Go template with the context roots the addon
+// controller provides.
+func renderTemplate(t *testing.T, tmpl string, values, deps map[string]any) string {
 	t.Helper()
-
 	parsed, err := template.New("out").Funcs(controllerFuncs()).Parse(tmpl)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-
 	ctx := map[string]any{
 		"Values":       values,
 		"Dependencies": deps,
 		"Cluster":      map[string]any{"name": "dev1-cluster"},
 		"Addon":        map[string]any{"name": "bootstrap"},
 	}
-
 	var out bytes.Buffer
 	if err := parsed.Execute(&out, ctx); err != nil {
 		t.Fatalf("execute: %v", err)
@@ -120,134 +113,111 @@ func render(t *testing.T, tmpl string, values, deps map[string]any) string {
 	return out.String()
 }
 
-func outputFor(t *testing.T, a acd, kind string) outputResource {
+// valuesSecret returns the values.yaml the ACD emits into its output Secret for a given
+// payload. This is what the addon controller wires into the guest PackageInstall.
+func valuesSecret(t *testing.T, a acd, values, deps map[string]any) string {
 	t.Helper()
-	for _, o := range a.Spec.TemplateOutputResources {
-		if o.TargetClusterOutput.Kind == kind {
-			return o
+	out := renderTemplate(t, a.Spec.TemplateOutputResources[0].Template, values, deps)
+
+	var secret struct {
+		StringData map[string]string `yaml:"stringData"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &secret); err != nil {
+		t.Fatalf("rendered Secret is not valid YAML: %v\n---\n%s", err, out)
+	}
+	v, ok := secret.StringData["values.yaml"]
+	if !ok {
+		t.Fatalf("output Secret has no stringData.values.yaml\n---\n%s", out)
+	}
+	return v
+}
+
+// packageRender feeds a values.yaml through the package's render files (addon/render),
+// exactly as the guest kapp-controller does, and returns the resources it emits.
+func packageRender(t *testing.T, valuesYAML string) []map[string]any {
+	t.Helper()
+	dir := t.TempDir()
+	valsPath := filepath.Join(dir, "vals.yaml")
+	if err := os.WriteFile(valsPath, []byte(valuesYAML), 0o600); err != nil {
+		t.Fatalf("write values: %v", err)
+	}
+	out := yttRender(t, "-f", "../addon/render/", "--data-values-file", valsPath)
+
+	var docs []map[string]any
+	dec := yaml.NewDecoder(bytes.NewReader(out))
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			break
+		}
+		if len(doc) > 0 {
+			docs = append(docs, doc)
 		}
 	}
-	t.Fatalf("no output resource of kind %q", kind)
-	return outputResource{}
+	return docs
 }
 
-// appPaths renders the App output and returns its inline fetch paths.
-func appPaths(t *testing.T, a acd, values, deps map[string]any) map[string]string {
-	t.Helper()
-
-	out := render(t, outputFor(t, a, "App").Template, values, deps)
-
-	var app struct {
-		Spec struct {
-			ServiceAccountName string `yaml:"serviceAccountName"`
-			Fetch              []struct {
-				Inline struct {
-					Paths map[string]string `yaml:"paths"`
-				} `yaml:"inline"`
-			} `yaml:"fetch"`
-		} `yaml:"spec"`
-	}
-	if err := yaml.Unmarshal([]byte(out), &app); err != nil {
-		t.Fatalf("rendered App is not valid YAML: %v\n---\n%s", err, out)
-	}
-	if len(app.Spec.Fetch) == 0 {
-		t.Fatalf("rendered App has no fetch stage\n---\n%s", out)
-	}
-	return app.Spec.Fetch[0].Inline.Paths
-}
-
-// TestOutputsAreBodyOnly guards the single most constraining API rule: a template is
-// the resource body only. Leaking apiVersion, kind or metadata into one would produce
-// a malformed resource in the guest cluster.
+// TestOutputsAreBodyOnly guards the single most constraining API rule: a template is the
+// resource body only. Leaking apiVersion, kind or metadata would malform the Secret.
 func TestOutputsAreBodyOnly(t *testing.T) {
-	a := renderConfig(t)
-	values := schemaDefaults(a)
-
+	a := renderACD(t)
+	if len(a.Spec.TemplateOutputResources) == 0 {
+		t.Fatal("ACD has no templateOutputResources")
+	}
 	for _, o := range a.Spec.TemplateOutputResources {
-		kind := o.TargetClusterOutput.Kind
-		out := render(t, o.Template, values, nil)
-
+		out := renderTemplate(t, o.Template, map[string]any{}, nil)
 		var body map[string]any
 		if err := yaml.Unmarshal([]byte(out), &body); err != nil {
-			t.Errorf("%s: template does not render to valid YAML: %v\n---\n%s", kind, err, out)
+			t.Errorf("%s: template does not render to valid YAML: %v\n---\n%s", o.target().Kind, err, out)
 			continue
 		}
 		for _, forbidden := range []string{"apiVersion", "kind", "metadata"} {
 			if _, found := body[forbidden]; found {
-				t.Errorf("%s: template sets %q, but a template is the resource body only", kind, forbidden)
+				t.Errorf("%s: template sets %q, but a template is the resource body only", o.target().Kind, forbidden)
 			}
 		}
 	}
 }
 
-// TestClusterRoleBindingUsesConfiguredRole checks the RBAC body shape (top-level
-// roleRef and subjects, no spec) and that clusterRoleName is honored.
-func TestClusterRoleBindingUsesConfiguredRole(t *testing.T) {
-	a := renderConfig(t)
-
-	values := schemaDefaults(a)
-	if got := values["clusterRoleName"]; got != "cluster-admin" {
-		t.Fatalf("expected clusterRoleName to default to cluster-admin, got %v", got)
+// TestOutputsAreValuesSecrets pins the wiring: the addon controller marshals the ACD
+// output Secret into the guest PackageInstall's values, so both outputs must be Secrets
+// and at least one must be a ValuesRef.
+func TestOutputsAreValuesSecrets(t *testing.T) {
+	a := renderACD(t)
+	valuesRef := false
+	for _, o := range a.Spec.TemplateOutputResources {
+		if o.target().Kind != "Secret" {
+			t.Errorf("output is a %q, but the package is fed by a values Secret", o.target().Kind)
+		}
+		if o.target().ReferenceType == "ValuesRef" {
+			valuesRef = true
+		}
 	}
-
-	values["clusterRoleName"] = "edit"
-	out := render(t, outputFor(t, a, "ClusterRoleBinding").Template, values, nil)
-
-	var crb struct {
-		RoleRef struct {
-			Kind string `yaml:"kind"`
-			Name string `yaml:"name"`
-		} `yaml:"roleRef"`
-		Subjects []struct {
-			Kind      string `yaml:"kind"`
-			Name      string `yaml:"name"`
-			Namespace string `yaml:"namespace"`
-		} `yaml:"subjects"`
-	}
-	if err := yaml.Unmarshal([]byte(out), &crb); err != nil {
-		t.Fatalf("not valid YAML: %v\n---\n%s", err, out)
-	}
-	if crb.RoleRef.Name != "edit" {
-		t.Errorf("roleRef.name = %q, want edit", crb.RoleRef.Name)
-	}
-	if len(crb.Subjects) != 1 || crb.Subjects[0].Namespace != "vks-bootstrap" {
-		t.Errorf("unexpected subjects: %+v", crb.Subjects)
+	if !valuesRef {
+		t.Error("no output Secret is a ValuesRef; nothing wires the payload into the PackageInstall")
 	}
 }
 
-// TestNoPayloadStillRenders is the nil-guard test. Every payload source is optional,
-// so an AddonConfig that sets none of them must still produce a valid App with a
-// non-empty inline paths map -- kapp-controller rejects a fetch with no paths.
-func TestNoPayloadStillRenders(t *testing.T) {
-	a := renderConfig(t)
+// TestFullRoundTrip is the end-to-end check: an AddonConfig payload is encoded by the
+// ACD into a values Secret, then the package's ytt turns those values back into the
+// original resources. It runs each payload source alone and all together.
+func TestFullRoundTrip(t *testing.T) {
+	a := renderACD(t)
 
-	paths := appPaths(t, a, schemaDefaults(a), nil)
-	if len(paths) == 0 {
-		t.Fatal("App rendered with no inline paths; kapp-controller needs at least one")
-	}
-}
-
-// TestPayloadSources covers each payload source alone and all three together. The
-// embedded values must survive as parseable YAML, which is what the toJson encoding
-// in the template buys.
-func TestPayloadSources(t *testing.T) {
-	// Deliberately awkward: leading comment, deep indentation and a blank line, the
-	// kind of payload that breaks naive indent-based embedding.
-	rawYAML := `# platform baseline
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: team-a
-
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: registry-pull
-  namespace: team-a
-stringData:
-  password: "s3cr3t: with colons"
-`
+	rawYAML := "# platform baseline\n" +
+		"apiVersion: v1\n" +
+		"kind: Namespace\n" +
+		"metadata:\n" +
+		"  name: team-a\n" +
+		"\n" +
+		"---\n" +
+		"apiVersion: v1\n" +
+		"kind: Secret\n" +
+		"metadata:\n" +
+		"  name: registry-pull\n" +
+		"  namespace: team-a\n" +
+		"stringData:\n" +
+		"  note: \"value: with a colon\"\n"
 
 	structured := []any{
 		map[string]any{
@@ -267,99 +237,106 @@ stringData:
 	}
 
 	cases := []struct {
-		name      string
-		values    map[string]any
-		deps      map[string]any
-		wantPath  string
-		wantInner string
+		name    string
+		values  map[string]any
+		deps    map[string]any
+		wantGVK []string // "kind/name"
 	}{
 		{
-			name:      "raw yaml only",
-			values:    map[string]any{"resourcesYaml": rawYAML},
-			wantPath:  "10-inline.yml",
-			wantInner: "s3cr3t: with colons",
+			name:    "structured only",
+			values:  map[string]any{"resources": structured},
+			wantGVK: []string{"ConfigMap/seed"},
 		},
 		{
-			name:      "structured only",
-			values:    map[string]any{"resources": structured},
-			wantPath:  "20-structured-000.yml",
-			wantInner: "hello: world",
+			name:    "raw yaml only",
+			values:  map[string]any{"resourcesYaml": rawYAML},
+			wantGVK: []string{"Namespace/team-a", "Secret/registry-pull"},
 		},
 		{
-			name:      "configmap only",
-			deps:      configMap,
-			wantPath:  "rbac.yaml",
-			wantInner: "kind: RoleBinding",
+			name:    "configmap only",
+			deps:    configMap,
+			wantGVK: []string{"RoleBinding/deployer"},
+		},
+		{
+			name:    "all sources combined",
+			values:  map[string]any{"resources": structured, "resourcesYaml": rawYAML},
+			deps:    configMap,
+			wantGVK: []string{"ConfigMap/seed", "Namespace/team-a", "Secret/registry-pull", "RoleBinding/deployer"},
 		},
 	}
 
-	a := renderConfig(t)
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			values := schemaDefaults(a)
-			for k, v := range tc.values {
-				values[k] = v
-			}
+			vals := valuesSecret(t, a, tc.values, tc.deps)
+			docs := packageRender(t, vals)
 
-			paths := appPaths(t, a, values, tc.deps)
-
-			content, found := paths[tc.wantPath]
-			if !found {
-				t.Fatalf("no inline path %q; got %v", tc.wantPath, keys(paths))
+			got := map[string]bool{}
+			for _, d := range docs {
+				kind, _ := d["kind"].(string)
+				meta, _ := d["metadata"].(map[string]any)
+				name, _ := meta["name"].(string)
+				got[kind+"/"+name] = true
 			}
-			if !strings.Contains(content, tc.wantInner) {
-				t.Errorf("path %q missing %q; got:\n%s", tc.wantPath, tc.wantInner, content)
-			}
-
-			// The payload must round-trip as YAML, not just as a string.
-			dec := yaml.NewDecoder(strings.NewReader(content))
-			for {
-				var doc any
-				if err := dec.Decode(&doc); err != nil {
-					if err.Error() == "EOF" {
-						break
-					}
-					t.Fatalf("payload at %q is not valid YAML: %v\n---\n%s", tc.wantPath, err, content)
+			for _, want := range tc.wantGVK {
+				if !got[want] {
+					t.Errorf("payload did not round-trip to %q; rendered %v", want, keys(got))
 				}
 			}
 		})
 	}
-
-	t.Run("all sources combined", func(t *testing.T) {
-		values := schemaDefaults(a)
-		values["resourcesYaml"] = rawYAML
-		values["resources"] = structured
-
-		paths := appPaths(t, a, values, configMap)
-
-		for _, want := range []string{"10-inline.yml", "20-structured-000.yml", "rbac.yaml"} {
-			if _, found := paths[want]; !found {
-				t.Errorf("missing inline path %q; got %v", want, keys(paths))
-			}
-		}
-	})
 }
 
-// TestConfigMapKeysAreQuoted covers ConfigMap keys that are not safe bare YAML keys.
-func TestConfigMapKeysAreQuoted(t *testing.T) {
-	a := renderConfig(t)
+// TestNoPayloadRendersEmpty confirms the nil-guard path: an AddonConfig with no payload
+// produces a values Secret that renders to no resources, rather than erroring. The empty
+// case is what a package's deploy has to tolerate.
+func TestNoPayloadRendersEmpty(t *testing.T) {
+	a := renderACD(t)
+	vals := valuesSecret(t, a, map[string]any{}, nil)
 
-	deps := map[string]any{
-		"bootstrapConfigMap": map[string]any{
-			"data": map[string]any{
-				"10:weird key.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: odd\n",
-			},
-		},
+	// The values Secret must carry both keys, defaulted, so the package's ytt schema is
+	// satisfied and json.decode/split see empty inputs.
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(vals), &parsed); err != nil {
+		t.Fatalf("values.yaml is not valid YAML: %v\n%s", err, vals)
 	}
-
-	paths := appPaths(t, a, schemaDefaults(a), deps)
-	if _, found := paths["10:weird key.yaml"]; !found {
-		t.Errorf("colon-bearing key did not survive; got %v", keys(paths))
+	if _, ok := parsed["resourcesJson"]; !ok {
+		t.Errorf("values.yaml missing resourcesJson\n%s", vals)
+	}
+	if got := parsed["resourcesJson"]; got != "[]" {
+		t.Errorf("resourcesJson = %v, want \"[]\" for an empty payload", got)
+	}
+	docs := packageRender(t, vals)
+	if len(docs) != 0 {
+		t.Errorf("empty payload rendered %d resources, want 0", len(docs))
 	}
 }
 
-func keys(m map[string]string) []string {
+// TestResourcesJsonIsValid pins the encoding: resourcesJson must be a JSON string the
+// package can decode, not a YAML structure.
+func TestResourcesJsonIsValid(t *testing.T) {
+	a := renderACD(t)
+	vals := valuesSecret(t, a, map[string]any{
+		"resources": []any{map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "x"}}},
+	}, nil)
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(vals), &parsed); err != nil {
+		t.Fatalf("values.yaml invalid: %v", err)
+	}
+	s, ok := parsed["resourcesJson"].(string)
+	if !ok {
+		t.Fatalf("resourcesJson is %T, want a JSON string", parsed["resourcesJson"])
+	}
+	var arr []any
+	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+		t.Fatalf("resourcesJson is not valid JSON: %v\n%s", err, s)
+	}
+	if len(arr) != 1 {
+		t.Errorf("decoded %d resources, want 1", len(arr))
+	}
+}
+
+func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

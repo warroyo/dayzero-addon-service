@@ -2,184 +2,136 @@
 
 Read [`design.md`](./design.md) first for the API constraints this depends on.
 
-## There is no fast loop
+## What is already proven
 
-`Addon`, `AddonRelease` and `AddonConfigDefinition` come only from a Supervisor Service
-or from an `AddonRepository` reconcile. No administrator can apply them, in any
-namespace:
+Two parts of the chain are validated without a full install, and should stay green.
 
-```console
-$ kubectl auth can-i create addonconfigdefinitions.addons.kubernetes.vmware.com --all-namespaces
-no
-$ kubectl apply -f addon.yml
-Error from server (Forbidden): addons.addons.kubernetes.vmware.com is forbidden:
-User "sso:Administrator@gpu.local" cannot create resource "addons" in API group
-"addons.kubernetes.vmware.com" in the namespace "vmware-system-vks-public"
-```
+**The render round trip, locally.** `make test` renders the ACD's Go templates and the
+package's ytt and asserts a payload encoded into the values Secret comes back out as the
+resources it went in as, across structured, raw-string and ConfigMap sources. It also
+validates the ACD against the real CRD schema and pins the namespace and labels the
+validating webhook requires.
 
-The only way onto a Supervisor is to build the service and install it, which makes
-step 2 below the gating check rather than a late risk.
+**The guest-side mechanism, in a live cluster.** A `PackageInstall` pointing at an inline
+package with this project's exact render turned per-cluster values into the expected
+resources, with vendir fetching nothing from a registry, and deleting the PackageInstall
+removed what it applied. So once the manager creates the addon, the guest half works.
 
-### What can be checked without one
+## The one unproven step
 
-`make test` covers more than it first appears. It validates the rendered resources
-against the real CRD schemas, extracted from a live Supervisor into `test/schemas/`.
-That is the closest available substitute for a server-side dry run, and it is stricter
-than the API server: unknown fields are rejected rather than silently pruned, so a
-misspelled field name fails the build instead of producing a quietly wrong definition.
-It also renders the templates using the same function map the addon controller exposes
-(sprig plus the Helm-style `toYaml`), across every combination of payload sources, and
-checks the cross-references between the three resources, which are assembled from ytt
-values in separate files and would otherwise only break at install time.
+Whether a hand-authored `AddonRepository` makes the manager materialise our ACD and sync
+an inline-content package to the guest. This cannot be tested without a bundle the
+Supervisor can pull, because that is what an `AddonRepository` fetches. Everything downstream
+of it is verified above; this runbook exists to close it.
 
-Neither dry-run mode is worth reaching for:
-
-| Approach | Result |
-|---|---|
-| `kubectl apply --dry-run=server` | `Forbidden`, the same RBAC wall |
-| `kubectl apply --dry-run=client --validate=true` | Validates nothing. Accepts both `scope: NotARealScope` and entirely invented fields |
-
-`TestSchemaValidationHasTeeth` guards against the second row by corrupting the rendered
-definition three ways and failing if validation lets any through.
-
-What none of this can tell you is whether the addon controller *accepts and acts on*
-the definition, or whether the service can be installed at all. That needs steps 1 and
-2.
-
----
-
-## Step 1: build and install
+## Step 1: build and publish the bundle
 
 ```sh
-make render                    # inspect the addon CRs
-make test                      # render the Go templates, assert they hold up
-VERSION=0.1.0 make release     # -> bootstrap-addon.yml
+make bundle                 # assemble build/bundle, inspect it
+make test                   # render templates, validate, assert the round trip
+make push VERSION=1.0.0     # publish to the registry
 ```
 
-Confirm `bootstrap-addon.yml` is two documents (`PackageMetadata` and `Package`) and
-that `fetch.imgpkgBundle.image` carries a resolved `@sha256:` digest.
+Confirm the bundle is a package repository: `build/bundle/packages/<pkg>/{metadata.yml,1.0.0.yml}`
+plus a `.imgpkg/images.yml` with an empty `images` list (no container images to mirror).
+Confirm the Package's `addon-config-definition` annotation decodes back to the ACD.
 
-vCenter → **Workload Management → Services → Add Service** → upload it → install.
+## Step 2: install the AddonRepository
 
-## Step 2: did the definition land? (the gating question)
+Either method from the README. Point `imageURL` at the bundle from step 1.
+
+```sh
+kubectl apply -f install/addonrepository.yml
+```
+
+## Step 3: did the manager materialise the addon? (the gating question)
 
 ```sh
 kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
 ```
 
-All three should be present. The package does not create them: it creates RBAC and an
-App in the service's own namespace, and the App creates these. So check that first if
-they are missing:
+All three should appear. If they do not, read the repository install status:
 
 ```sh
-kubectl -n <service-ns> get app bootstrap-addon-resources -o yaml
+kubectl -n vmware-system-vks-public get addonrepositoryinstall \
+  bootstrap-addon-repo-install -o jsonpath='{.status.usefulErrorMessage}'
 ```
 
-`status.friendlyDescription` and `status.deploy.stdout` carry the kapp output, including
-any `Forbidden` or admission rejection on the three CRs.
+A fetch error means the bundle is unreachable or the `imageURL` is wrong. A validation
+error names the field: the most likely is a `package-offerings` annotation that does not
+match the packages actually in the bundle. If the `AddonRelease` is present but rejected,
+check its status against the shape in `design.md`.
 
-If the App itself is absent, read the reconcile error:
+Confirm the ACD came through intact:
 
 ```sh
-kubectl -n vmware-system-supervisor-services get pkgi \
-  svc-bootstrap-addon.fling.vsphere.vmware.com \
-  -o jsonpath='{.status.usefulErrorMessage}'
+kubectl -n vmware-system-vks-public get acd bootstrap.kubernetes.vmware.com.1.0.0 \
+  -o jsonpath='{.spec.schema.openAPIV3Schema.properties}'
 ```
 
-**The open question is whether the deployer account may create the `ClusterRole`.**
-Kubernetes escalation-prevention lets an account grant only rights it already holds, or
-holds `escalate` for, and the `ClusterRole` here grants writes on the addon kinds. If
-the package fails on the `ClusterRole` or its binding, that is the answer, and no
-arrangement of this design gets around it: a controller image would need the same
-rights.
+It should show `resources` and `resourcesYaml`, our schema, not a generated one.
 
-If the RBAC lands but the App reports `Forbidden` creating the CRs, the `ClusterRole` is
-missing a verb or a resource. If the App reports the CRs going into the service
-namespace rather than `vmware-system-vks-public`, the namespace rewrite is being applied
-to Apps generally rather than set per App, and the design needs rethinking rather than
-patching.
+## Step 4: attach it to a cluster
 
-If the `AddonRelease` is rejected at admission instead, check the error against
-*Package-free addons are legal* in `design.md`. Three shipped releases are
-package-free, so this would be surprising.
-
-## Step 3: attach it to a cluster
-
-Everything from here is admin-creatable, so iteration is cheap again.
-
-Apply, into the cluster's Supervisor namespace:
+Into the cluster's Supervisor namespace, apply:
 
 1. [`examples/addonconfig-structured.yml`](../examples/addonconfig-structured.yml),
-   renamed to `<cluster>-bootstrap`, starting with a trivial payload. One `ConfigMap`
-   in `default` is enough to prove the path.
+   renamed to `<cluster>-bootstrap`, starting with a trivial payload (one ConfigMap in
+   `default` is enough).
 2. [`examples/addoninstall.yml`](../examples/addoninstall.yml), then label the cluster.
 
-If the `ClusterAddon` never appears, check the `AddonInstall`'s status first.
+If the `ClusterAddon` never appears, check the `AddonInstall` status first.
 
-## Step 4: watch reconciliation on the Supervisor
+## Step 5: watch reconciliation on the Supervisor
 
 ```sh
-kubectl -n <cluster-ns> get clusteraddon
 kubectl -n <cluster-ns> get clusteraddon <cluster>-bootstrap -o yaml
 ```
 
-Template rendering failures surface here, in the conditions. This is the primary
-debugging surface for the definition.
-
-## Step 5: confirm in the guest cluster
+Template rendering failures surface here, in the conditions. This is the primary debugging
+surface for the ACD. Confirm the values Secret was produced:
 
 ```sh
-kubectl get ns vks-bootstrap
-kubectl -n vks-bootstrap get app vks-bootstrap -o yaml
+kubectl -n <cluster-ns> get secret <cluster>-bootstrap-data-values -o jsonpath='{.data.values\.yaml}' | base64 -d
 ```
 
-`status.friendlyDescription` gives a one-line verdict; `status.deploy.stdout` has the
-full kapp apply log. Then confirm the payload itself landed:
+It should carry `resourcesJson` and `resourcesYaml`.
+
+## Step 6: confirm in the guest cluster
 
 ```sh
+kubectl -n vmware-system-tkg get pkgi <cluster>-bootstrap -o yaml   # status.usefulErrorMessage on failure
 kubectl -n default get configmap <payload>
 ```
 
-## Step 6: the three payload sources
+The `PackageInstall` should reconcile, and the payload resources should be present.
 
-Each independently, then combined, mirroring what `make test` covers locally:
-`values.resources`, `values.resourcesYaml`, and a `<cluster>-bootstrap` ConfigMap.
-The ConfigMap input is optional, so confirm an `AddonConfig` with `values: {}` and no
-ConfigMap still reconciles rather than blocking.
+## Step 7: the payload sources and lifecycle
 
-## Step 7: lifecycle
-
-- Edit the payload. kapp-controller reconciles and prunes resources removed from it.
-- Set `noopDelete: true`. Removing the addon then leaves the payload behind.
-- Delete the `AddonInstall`, which cleans up, or retains under
+- Each source alone and combined: `values.resources`, `values.resourcesYaml`, and a
+  `<cluster>-bootstrap` ConfigMap. An `AddonConfig` with `values: {}` and no ConfigMap
+  should reconcile to an empty payload, not error.
+- Edit the payload: the `PackageInstall` re-reconciles and prunes resources removed from it.
+- Delete the `AddonInstall`: the payload is cleaned up, or retained under
   `stopMatchingBehavior: Retain`.
-- Confirm the `AddonConfig` is garbage-collected with the `ClusterAddon`. This is what
-  the `owned-for-deletion` annotation buys, and it is easy to get wrong.
+- Confirm the `AddonConfig` is garbage collected with the `ClusterAddon`, which the
+  `owned-for-deletion` annotation buys.
 
 ## Step 8: the real test
 
 Create a brand-new cluster with the `AddonInstall` label already in place, using
-[`examples/platform-baseline/`](../examples/platform-baseline/) as the payload.
-Confirm the namespaces, service accounts, RBAC and quotas are present with no manual
-step, and that they landed early enough to be useful, before anyone would have had to
-be handed a kubeconfig.
-
-Seeding an existing cluster proves the mechanism works. Only this proves the tenant
-never needs workload-cluster credentials at all.
-
----
+[`examples/platform-baseline/`](../examples/platform-baseline/) as the payload. Confirm the
+namespaces, service accounts, RBAC and quotas are present with no manual step, and early
+enough to be useful. Seeding an existing cluster proves the mechanism; only a fresh cluster
+proves the tenant never needs a kubeconfig.
 
 ## Troubleshooting
 
 | Symptom | Look at |
 |---|---|
-| Addon CRs never appear after install | The App in the service namespace, then `.status.usefulErrorMessage` on the `pkgi`, step 2 |
-| Addon CRs denied by admission | `addon.validating.vmware.com` enforces the labels, and that an `AddonRelease` shares a namespace with its `Addon` and its definition. See design.md, *Naming and placement conventions* |
-| Addon CRs land in the service namespace | The App is carrying a namespace rewrite. Nothing in `config/app.yml` should set `defaultNamespace` or `deploy.kapp.intoNs` |
-| `AddonRelease` rejected at admission | Missing `spec.package`. See design.md, *Package-free addons are legal* |
-| ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then read the conditions |
-| Template renders but references wrong data | Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon`. See design.md, *The template dialect*. Lowercase `.values` silently yields nothing |
-| Nothing appears in guest cluster | Not `referenceType`, which is ignored for non-Secrets. Check the ClusterAddon conditions instead |
-| App exists but payload not applied | `kubectl -n vks-bootstrap get app vks-bootstrap -o yaml`, then `status.deploy.stdout` |
-| App fails with no inline paths | Every payload source was empty. The placeholder path should prevent this; see `TestNoPayloadStillRenders` |
-| ytt errors on user payload | `ignoreUnknownComments: true` is set, but ytt still parses `#@` as directives. Payloads containing `#@` need escaping |
+| Addon CRs never appear | `AddonRepositoryInstall.status.usefulErrorMessage`, step 3. Fetch error or `package-offerings` mismatch |
+| ACD present but schema is `helmValues`/`helmOptions` | A helm AddonRepository was installed by mistake; this project ships an imgpkg one |
+| ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then the conditions |
+| values Secret is empty or malformed | The ACD output template. Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon` (capital V) |
+| PackageInstall fails to render | The package ytt got malformed values. Decode the values Secret (step 5) and check `resourcesJson` is valid JSON |
+| Nothing applied, no error | An empty payload renders to zero resources by design; confirm the AddonConfig actually carries a payload |

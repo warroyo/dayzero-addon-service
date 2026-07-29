@@ -1,0 +1,36 @@
+#@ load("@ytt:data", "data")
+#@ pkg_ref = "{}.kubernetes.vmware.com".format(data.values.addon_name)
+---
+apiVersion: data.packaging.carvel.dev/v1alpha1
+kind: Package
+metadata:
+  name: #@ "{}.{}".format(pkg_ref, data.values.addon_version)
+  annotations:
+    #! The addon manager reads these to materialise the Addon, AddonRelease and ACD.
+    addon.kubernetes.vmware.com/addon-name: #@ data.values.addon_name
+    addons.kubernetes.vmware.com/addon-config-definition: #@ data.values.acd_encoded
+spec:
+  refName: #@ pkg_ref
+  version: #@ data.values.addon_version
+  #! kubernetesVersionConstraints lands on the generated AddonRelease.
+  kubernetesVersionSelection:
+    constraints: #@ data.values.kubernetes_version_constraints
+  template:
+    spec:
+      #! inline fetch: the render logic travels in the CR, so the guest pulls no image
+      #! for the package content. The tenant payload arrives as values (the ACD's
+      #! values Secret), not as fetched files.
+      fetch:
+      - inline:
+          paths:
+            #! The render files live in addon/render/ so the tests exercise the exact
+            #! ytt the guest runs. `make bundle` injects them here as data values.
+            values-schema.yml: #@ data.values.render_values_schema
+            render.yml: #@ data.values.render
+      template:
+      - ytt:
+          paths:
+          - values-schema.yml
+          - render.yml
+      deploy:
+      - kapp: {}

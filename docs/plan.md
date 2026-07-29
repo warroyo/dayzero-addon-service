@@ -1,93 +1,84 @@
 # Build and layout
 
-Read [`design.md`](./design.md) first, since it holds the API constraints behind
-everything here. [`verify.md`](./verify.md) covers installing and testing the result.
+Read [`design.md`](./design.md) first for the API constraints behind everything here.
+[`verify.md`](./verify.md) covers installing and testing the result.
 
 ## Layout
 
 ```
 bootstrap-addon-service/
-├── Makefile                       # render / test / release
-├── package-build.yml              # kctrl PackageBuild
-├── package-resources.yml          # Package + PackageMetadata + PackageInstall
-├── config/                        # ytt-rendered, imgpkg-bundled
-│   ├── values.yml                 # ytt data-values schema, surfaced by vCenter at install
-│   ├── rbac.yml                   # SA in the service ns, ClusterRole for the public ns
-│   ├── app.yml                    # the App that creates the addon CRs
-│   └── _ytt_lib/addon/            # the three CRs, rendered into the App's inline paths
-│       ├── addon.yml
-│       ├── addonrelease.yml       # no spec.package
-│       └── addonconfigdefinition.yml  # the core piece
-├── test/                          # renders the definition's Go templates
-├── examples/
+├── Makefile                       # bundle / render / test / push
+├── addon/                         # source for the addon-repository bundle
+│   ├── values.yml                 # ytt data values (name, version, k8s constraints)
+│   ├── addonconfigdefinition.yml  # the ACD, encoded into the Package annotation
+│   ├── package.yml                # the Package (ACD annotation + inline render)
+│   ├── metadata.yml               # the PackageMetadata
+│   └── render/                    # the package's ytt, shared with the tests
+│       ├── values-schema.yml
+│       └── render.yml
+├── install/
+│   └── addonrepository.yml        # AddonRepository + AddonRepositoryInstall (admin apply)
+├── supervisor-service/            # the same two CRs, wrapped as a Supervisor Service
+│   ├── config/
+│   ├── package-build.yml
+│   └── package-resources.yml
+├── examples/                      # tenant AddonInstall + AddonConfig
+├── test/                          # renders the ACD templates and the package ytt
 └── docs/
 ```
 
-Modelled on [`warroyo/argocd-attach-service`](https://github.com/warroyo/argocd-attach-service),
-a working Supervisor Service, minus everything to do with a controller. This service
-ships no image, no Dockerfile and no Go binary, so `kbld` resolves nothing and the
-images lock comes out empty, which makes air-gap relocation just the bundle itself.
+## Two template languages, kept apart
 
-## Two template languages, deliberately kept apart
+`addon/` mixes two template systems on purpose, and they never overlap:
 
-`config/` is processed by ytt at build time (`#@` directives), and the strings inside
-`templateOutputResources[].template` are processed by the addon controller's Go
-templates at reconcile time (`{{ }}`). They do not collide, but interleaving them is
-unreadable.
-
-So ytt is used only for values that vary per *release*, meaning addon name, version and
-namespace, and the guest-cluster resource names are hardcoded to `vks-bootstrap`. The
-three CRs sit in `config/_ytt_lib/addon` so ytt does not emit them as package resources;
-`config/app.yml` evaluates that library and `yaml.encode`s the result into the App's
-inline paths.
-Anything that varies per *cluster* goes through the definition's own schema and is
-read at runtime as `.Values.<field>`.
+- **ytt at build time** (`#@` directives) fills in per-release values: addon name,
+  version, and the encoded ACD. It renders `addon/` into the bundle.
+- **Go templates at reconcile time** (`{{ }}`) are the ACD's output templates, evaluated
+  per cluster by the addon controller. They stay literal through ytt and through the
+  gzip+base64 encoding, and the controller evaluates them later.
+- **ytt again in the guest**: the package's own render (`addon/render/`) is ytt, run by
+  the guest kapp-controller over the values Secret.
 
 ## Build
 
 | Target | Does |
 |---|---|
-| `render` | `ytt -f config`, with `NAMESPACE` standing in for the value the Supervisor supplies at install |
-| `test`   | `go vet` and `go test` in `test/`, which render each output template and assert the result |
-| `release`| `kctrl package release`, then concatenates the generated `metadata.yml` and `package.yml` into `bootstrap-addon.yml` |
+| `bundle` | Renders the ACD, encodes it into the Package annotation, injects the render files, and assembles the package-repository bundle under `build/bundle` |
+| `render` | Shows the Package and the ACD decoded from its annotation |
+| `test`   | `go vet` and `go test` in `test/` |
+| `push`   | `imgpkg push` the bundle to `ADDON_REPO` |
 
-`bootstrap-addon.yml` is the artifact uploaded through **Workload Management →
-Services → Add Service**. `package-build.yml` sets the bundle destination
-(`ghcr.io/warroyo/bootstrap-addon-service`); override it there for a different
-registry.
+The ACD travels in the Package's `addon-config-definition` annotation as gzip+base64,
+which is how the shipped cilium addon delivers its definition. `make bundle` does the
+encoding, so the ACD stays a readable file. The bundle's `.imgpkg/images.yml` is an empty
+ImagesLock: the package content is config only, so there are no container images to
+mirror for air-gap.
 
-CI mirrors this. `.github/workflows/test.yml` runs render and tests on every PR, and
-`.github/workflows/build-release.yml` runs `make release` on a `v*` tag and attaches
-the artifact to a GitHub release.
+CI (`.github/workflows/build-release.yml`) runs `make push` on a `v*` tag and attaches the
+install manifest to a GitHub release.
 
 ## Why `test/` exists
 
-Not for coverage. There is no way to iterate against a real Supervisor, because an
-`AddonConfigDefinition` cannot be created by hand, even by the vSphere administrator
-(see `verify.md`), so the only loop that exercises the real controller is build,
-upload, install.
+The addon kinds cannot be created by hand (the manager owns `Addon` and `AddonRelease`),
+so the only loop that exercises the real controller is build, publish, install. The tests
+close as much of that gap as possible without a Supervisor:
 
-`test/render_test.go` closes part of that gap by reproducing the controller's template
-environment: sprig, plus the Helm-style `toYaml` the controller registers but sprig
-does not provide. It asserts that every output stays body-only (no `apiVersion`,
-`kind` or `metadata`), that the `App` renders to valid YAML with a non-empty inline
-paths map for every combination of payload sources including none, and that awkward
-payloads survive the JSON encoding intact, including colons in ConfigMap keys and
-comments and blank lines in raw YAML.
+`test/render_test.go` renders the ACD's Go templates with the controller's function map
+(sprig plus the Helm-style `toYaml`), then runs the resulting values through the package's
+own ytt (`addon/render/`). It asserts the full round trip: a payload encoded into the
+values Secret comes back out as the resources it went in as, for each payload source and
+all combined, and that an empty payload renders to nothing rather than erroring. Because
+the render files are shared, the test runs the exact ytt the guest runs.
 
-`test/schema_test.go` reaches through the App into its inline paths, where the three CRs
-live, and validates them against the real CRD schemas in `test/schemas/`. It also pins
-what the schemas leave out: the namespace and labels the validating webhook demands, and
-that the App carries no namespace rewrite of its own. Note that `kubectl apply
---dry-run=client --validate=true` is not a substitute, since it accepts invalid enum
-values and invented fields alike. Server-side dry run hits the same RBAC wall as a real
-apply.
+`test/schema_test.go` validates the rendered ACD against the real CRD schema in
+`test/schemas/`, pins the namespace and labels the validating webhook requires (which the
+CRD schema does not cover), and checks the Package's annotation round-trips through
+gzip+base64 back to the ACD.
 
 The schemas are stricter than the API server on purpose. A CRD prunes unknown fields
-rather than rejecting them, so a typo'd field name yields a silently wrong definition.
-`additionalProperties: false` is injected wherever the CRD does not explicitly
-preserve unknown fields, turning that into a test failure. Regenerate them against a
-Supervisor with:
+rather than rejecting them, so a typo'd field yields a silently wrong definition;
+`additionalProperties: false` is injected wherever the CRD does not preserve unknown
+fields, turning that into a test failure. Regenerate them against a Supervisor with:
 
 ```sh
 for c in addonconfigdefinitions addons addonreleases; do
@@ -105,5 +96,5 @@ for c in addonconfigdefinitions addons addonreleases; do
 done
 ```
 
-What none of it can tell you is whether the addon controller accepts and acts on the
-definition. That is `verify.md` step 2.
+What none of it can tell you is whether the `AddonRepository` round trip works on a
+Supervisor. That is `verify.md`.

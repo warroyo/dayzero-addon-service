@@ -19,7 +19,7 @@ spec:
           - kbld: {}
       export:
       - imgpkgBundle:
-          image: ghcr.io/warroyo/bootstrap-addon-service
+          image: ghcr.io/warroyo/bootstrap-addon-service-wrapper
           useKbldImagesLock: true
         includePaths:
         - config

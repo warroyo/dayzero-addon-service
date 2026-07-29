@@ -1,3 +1,4 @@
 .vscode
 carvel-artifacts/
 bootstrap-addon.yml
+build/

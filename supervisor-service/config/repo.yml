@@ -1,0 +1,30 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:json", "json")
+
+#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": [data.values.addon_package_version]}}}
+
+#! No explicit namespace: the Supervisor Service deploy rewrites these into the service's
+#! own namespace, and the manager reconciles AddonRepository/AddonRepositoryInstall there
+#! (verified). The install's ref points back at that same namespace.
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepository
+metadata:
+  name: bootstrap-addon-repo
+  annotations:
+    addons.kubernetes.vmware.com/package-offerings: #@ json.encode(offerings)
+spec:
+  fetch:
+    imgpkgBundle:
+      imageURL: #@ data.values.addon_repo_image
+  targetRepositoryName: bootstrap-addon-repo
+  version: #@ data.values.repository_version
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepositoryInstall
+metadata:
+  name: bootstrap-addon-repo-install
+spec:
+  addonRepositoryRef:
+    name: bootstrap-addon-repo
+    namespace: #@ data.values.namespace

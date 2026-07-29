@@ -1,0 +1,95 @@
+#@ load("@ytt:data", "data")
+#@ acd_name = "{}.kubernetes.vmware.com.{}".format(data.values.addon_name, data.values.addon_version)
+#@ values_secret = "{{.Cluster.name}}-" + data.values.addon_name + "-data-values"
+#! This file is rendered by ytt (for name/version) and then gzip+base64-encoded into the
+#! Package annotation by `make bundle`. The manager decodes it and creates the ACD.
+#!
+#! Everything inside a `template:` block is Go template + sprig, evaluated per cluster by
+#! the addon controller, and is the resource BODY only. See docs/design.md.
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfigDefinition
+metadata:
+  name: #@ acd_name
+  namespace: vmware-system-vks-public
+  labels:
+    addon.kubernetes.vmware.com/addon-name: #@ data.values.addon_name
+    addon.kubernetes.vmware.com/addon-namespace: vmware-system-vks-public
+spec:
+  #! Read the optional payload ConfigMap and write the values Secret. Supervisor-side
+  #! rights only, not guest-cluster rights.
+  addonInstallPermission:
+    accessPolicies:
+    - order: 0
+      rules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources: ["secrets"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  schema:
+    openAPIV3Schema:
+      type: object
+      properties:
+        resources:
+          type: array
+          description: >-
+            Kubernetes resources to apply into the cluster, as structured YAML. Each
+            item is one complete resource.
+          items:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        resourcesYaml:
+          type: string
+          description: >-
+            Kubernetes resources to apply into the cluster, as a single raw
+            multi-document YAML string.
+
+  templateInputResources:
+  #! Optional: the payload must still render when no ConfigMap exists.
+  - inputName: bootstrapConfigMap
+    apiVersion: v1
+    kind: ConfigMap
+    name: '{{.Cluster.name}}-bootstrap'
+    scope: Namespace
+    constraints:
+    - operator: optional
+
+  templateOutputResources:
+  #! 1 - the values Secret on the Supervisor, wired as the guest PackageInstall's values
+  #! (referenceType ValuesRef). The package's ytt reads these and emits the resources.
+  - supervisorNamespaceOutput:
+      apiVersion: v1
+      kind: Secret
+      name: #@ values_secret
+      referenceType: ValuesRef
+    template: |
+      {{- $rawYaml := .Values.resourcesYaml | default "" -}}
+      {{- if .Dependencies }}{{- if .Dependencies.bootstrapConfigMap }}{{- range $k, $v := .Dependencies.bootstrapConfigMap.data }}
+      {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
+      {{- end }}{{- end }}{{- end }}
+      stringData:
+        values.yaml: |
+          resourcesJson: {{ .Values.resources | default list | toJson | toJson }}
+          resourcesYaml: {{ $rawYaml | toJson }}
+      type: Opaque
+
+  #! 2 - the same values Secret inside the guest package namespace, so the guest
+  #! PackageInstall can consume it. Same body, no referenceType.
+  - targetClusterOutput:
+      apiVersion: v1
+      kind: Secret
+      name: #@ values_secret
+      namespace: #@ data.values.guest_package_namespace
+    template: |
+      {{- $rawYaml := .Values.resourcesYaml | default "" -}}
+      {{- if .Dependencies }}{{- if .Dependencies.bootstrapConfigMap }}{{- range $k, $v := .Dependencies.bootstrapConfigMap.data }}
+      {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
+      {{- end }}{{- end }}{{- end }}
+      stringData:
+        values.yaml: |
+          resourcesJson: {{ .Values.resources | default list | toJson | toJson }}
+          resourcesYaml: {{ $rawYaml | toJson }}
+      type: Opaque

@@ -24,7 +24,7 @@ jobs:
       - name: Install Carvel Tools
         run: |
           curl -L https://carvel.dev/install.sh | sudo bash
-          kctrl version
+          ytt version && imgpkg version
 
       - name: Set Version
         run: |
@@ -35,13 +35,23 @@ jobs:
             echo "VERSION=latest" >> $GITHUB_ENV
           fi
 
-      - name: Release Package
+      - name: Push the addon-repository bundle
         if: startsWith(github.ref, 'refs/tags/v')
-        run: make release
+        run: make push VERSION=${{ env.VERSION }}
+
+      - name: Assemble install manifest for the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cp install/addonrepository.yml bootstrap-addonrepository.yml
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: bootstrap-addon.yml
+          files: bootstrap-addonrepository.yml
           generate_release_notes: true
+          body: |
+            The addon-repository bundle for this release is published to
+            `ghcr.io/warroyo/bootstrap-addon-repo:${{ env.VERSION }}`.
+
+            Install by applying `bootstrap-addonrepository.yml` (point `imageURL` at the
+            bundle above), or via the Supervisor Service in `supervisor-service/`.

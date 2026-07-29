@@ -2,113 +2,40 @@ package test
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
-	"os/exec"
-	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 )
 
-// Schemas are extracted from the CRDs on a live Supervisor (VKS 3.7), with
-// x-kubernetes-* extensions stripped and additionalProperties set to false wherever
-// the CRD does not preserve unknown fields - stricter than the API server, which
-// prunes typos silently. docs/plan.md has the jq filter to regenerate them.
-var schemaFor = map[string]string{
-	"AddonConfigDefinition": "schemas/addonconfigdefinitions.json",
-	"Addon":                 "schemas/addons.json",
-	"AddonRelease":          "schemas/addonreleases.json",
-}
+// The schema in test/schemas is extracted from the AddonConfigDefinition CRD on a live
+// Supervisor (VKS 3.7), with x-kubernetes-* extensions stripped and additionalProperties
+// set to false wherever the CRD does not preserve unknown fields, so a typo'd field is
+// rejected rather than silently pruned. docs/plan.md has the jq filter to regenerate it.
+const acdSchema = "schemas/addonconfigdefinitions.json"
 
-const (
-	// serviceNamespace stands in for the namespace the Supervisor deploys this service
-	// into and supplies as a data value. Everything the package applies itself is
-	// rewritten into it.
-	serviceNamespace = "svc-bootstrap-addon-svr31"
-
-	// addonNamespace is where the App puts the three addon CRs. An Addon is only valid
-	// in the public catalog, which the package cannot write to itself.
-	addonNamespace = "vmware-system-vks-public"
-)
-
-// renderedDocs runs ytt over config/ and returns each document as a generic map. These
-// are the resources the package applies: the RBAC and the App, not the addon CRs.
-func renderedDocs(t *testing.T) []map[string]any {
+// renderACDMap renders the ACD with ytt and returns it as a generic map for validation.
+func renderACDMap(t *testing.T) map[string]any {
 	t.Helper()
-
-	cmd := exec.Command("ytt", "-f", "../config", "--data-value", "namespace="+serviceNamespace)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("ytt -f ../config failed: %v\n%s", err, stderr.String())
+	out := yttRender(t, "-f", "../addon/addonconfigdefinition.yml", "-f", "../addon/values.yml")
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("rendered ACD is not valid YAML: %v", err)
 	}
-
-	var docs []map[string]any
-	dec := yaml.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	for {
-		var doc map[string]any
-		if err := dec.Decode(&doc); err != nil {
-			break
-		}
-		if len(doc) > 0 {
-			docs = append(docs, doc)
-		}
-	}
-	return docs
-}
-
-// inlineAddonYAML returns the multi-document YAML the App carries in its inline paths.
-// The package cannot create the addon CRs itself, so they travel as App content and
-// this is the only place they exist before install.
-func inlineAddonYAML(t *testing.T) []byte {
-	t.Helper()
-
-	for _, doc := range renderedDocs(t) {
-		if doc["kind"] != "App" {
-			continue
-		}
-		spec := doc["spec"].(map[string]any)
-		fetch := spec["fetch"].([]any)
-		paths := fetch[0].(map[string]any)["inline"].(map[string]any)["paths"].(map[string]any)
-		if len(paths) != 1 {
-			t.Fatalf("expected exactly one inline path, got %d", len(paths))
-		}
-		for _, content := range paths {
-			return []byte(content.(string))
-		}
-	}
-	t.Fatal("no App in the rendered config")
-	return nil
-}
-
-// addonDocs returns the three addon CRs the App carries.
-func addonDocs(t *testing.T) []map[string]any {
-	t.Helper()
-
-	var docs []map[string]any
-	dec := yaml.NewDecoder(bytes.NewReader(inlineAddonYAML(t)))
-	for {
-		var doc map[string]any
-		if err := dec.Decode(&doc); err != nil {
-			break
-		}
-		if len(doc) > 0 {
-			docs = append(docs, doc)
-		}
-	}
-	return docs
+	return doc
 }
 
 func compileSchema(t *testing.T, path string) *jsonschema.Schema {
 	t.Helper()
-
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource(path, bytes.NewReader(raw)); err != nil {
 		t.Fatalf("add %s: %v", path, err)
@@ -124,7 +51,6 @@ func compileSchema(t *testing.T, path string) *jsonschema.Schema {
 // server would, rather than yaml.v3's map[string]any with non-string keys.
 func toJSONValue(t *testing.T, v any) any {
 	t.Helper()
-
 	raw, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -136,266 +62,126 @@ func toJSONValue(t *testing.T, v any) any {
 	return out
 }
 
-// TestRenderedResourcesMatchCRDSchemas validates every rendered addon resource against
-// the real CRD schema. These kinds cannot be applied by hand, so this stands in for a
+// TestACDMatchesCRDSchema validates the AddonConfigDefinition against the real CRD
+// schema. It cannot be created by hand (the manager owns it), so this stands in for a
 // server-side dry run.
-func TestRenderedResourcesMatchCRDSchemas(t *testing.T) {
-	docs := addonDocs(t)
-	if len(docs) != 3 {
-		t.Fatalf("expected 3 rendered documents, got %d", len(docs))
-	}
-
-	seen := map[string]bool{}
-
-	for _, doc := range docs {
-		kind, _ := doc["kind"].(string)
-		path, known := schemaFor[kind]
-		if !known {
-			t.Errorf("rendered an unexpected kind %q", kind)
-			continue
-		}
-		seen[kind] = true
-
-		if err := compileSchema(t, path).Validate(toJSONValue(t, doc)); err != nil {
-			t.Errorf("%s does not match its CRD schema:\n%v", kind, err)
-		}
-	}
-
-	for kind := range schemaFor {
-		if !seen[kind] {
-			t.Errorf("no %s was rendered", kind)
-		}
+func TestACDMatchesCRDSchema(t *testing.T) {
+	doc := renderACDMap(t)
+	if err := compileSchema(t, acdSchema).Validate(toJSONValue(t, doc)); err != nil {
+		t.Errorf("AddonConfigDefinition does not match its CRD schema:\n%v", err)
 	}
 }
 
-// TestSchemaValidationHasTeeth guards the guard: strict validation is only worth
-// running if it actually rejects bad input.
+// TestSchemaValidationHasTeeth guards the guard: strict validation is only worth running
+// if it rejects bad input.
 func TestSchemaValidationHasTeeth(t *testing.T) {
-	schema := compileSchema(t, schemaFor["AddonConfigDefinition"])
-
-	var acdDoc map[string]any
-	for _, doc := range addonDocs(t) {
-		if doc["kind"] == "AddonConfigDefinition" {
-			acdDoc = doc
-		}
-	}
-	if acdDoc == nil {
-		t.Fatal("no AddonConfigDefinition rendered")
-	}
+	schema := compileSchema(t, acdSchema)
+	doc := renderACDMap(t)
 
 	cases := []struct {
 		name   string
 		mutate func(spec map[string]any)
 	}{
 		{
-			name: "invalid enum value",
-			mutate: func(spec map[string]any) {
-				outputs := spec["templateOutputResources"].([]any)
-				first := outputs[0].(map[string]any)
-				first["targetClusterOutput"].(map[string]any)["scope"] = "NotARealScope"
-			},
-		},
-		{
-			name: "misspelled field the API server would silently prune",
+			name: "misspelled input field the API server would prune",
 			mutate: func(spec map[string]any) {
 				inputs := spec["templateInputResources"].([]any)
 				inputs[0].(map[string]any)["inputNam"] = "typo"
 			},
 		},
 		{
-			name: "missing required field",
+			name: "output missing its template",
 			mutate: func(spec map[string]any) {
 				outputs := spec["templateOutputResources"].([]any)
-				first := outputs[0].(map[string]any)
-				delete(first["targetClusterOutput"].(map[string]any), "kind")
+				delete(outputs[0].(map[string]any), "template")
 			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Deep copy so each case starts from the real rendered document.
 			var broken map[string]any
-			raw, _ := json.Marshal(acdDoc)
+			raw, _ := json.Marshal(doc)
 			if err := json.Unmarshal(raw, &broken); err != nil {
 				t.Fatalf("copy: %v", err)
 			}
-
 			tc.mutate(broken["spec"].(map[string]any))
-
 			if err := schema.Validate(toJSONValue(t, broken)); err == nil {
-				t.Error("schema accepted an invalid AddonConfigDefinition; validation is not strict enough to be worth running")
+				t.Error("schema accepted an invalid AddonConfigDefinition; not strict enough to be worth running")
 			}
 		})
 	}
 }
 
-// TestAddonReleaseIsPackageFree pins the property the whole project rests on. If a
-// future edit adds spec.package, the addon stops being pure configuration and starts
-// pulling a Carvel package into the guest cluster.
-func TestAddonReleaseIsPackageFree(t *testing.T) {
-	for _, doc := range addonDocs(t) {
-		if doc["kind"] != "AddonRelease" {
-			continue
-		}
-		spec, _ := doc["spec"].(map[string]any)
-		if _, found := spec["package"]; found {
-			t.Error("AddonRelease sets spec.package; this addon must stay package-free")
-		}
-		if _, found := spec["addonConfigDefinitionRef"]; !found {
-			t.Error("AddonRelease has neither package nor addonConfigDefinitionRef and would be rejected")
-		}
-		return
+// TestACDSatisfiesTheValidatingWebhook pins what the addon.validating.vmware.com webhook
+// enforces and the CRD schema does not: the ACD must live in vmware-system-vks-public and
+// carry the addon-name and addon-namespace labels.
+func TestACDSatisfiesTheValidatingWebhook(t *testing.T) {
+	const (
+		addonNamespace = "vmware-system-vks-public"
+		addonName      = "bootstrap"
+		nameLabel      = "addon.kubernetes.vmware.com/addon-name"
+		nsLabel        = "addon.kubernetes.vmware.com/addon-namespace"
+	)
+	meta := renderACDMap(t)["metadata"].(map[string]any)
+
+	if ns, _ := meta["namespace"].(string); ns != addonNamespace {
+		t.Errorf("ACD namespace = %q, want %q", ns, addonNamespace)
 	}
-	t.Fatal("no AddonRelease rendered")
-}
-
-// TestConfigDefinitionRefsResolve checks the three resources actually point at each
-// other. Names are assembled from ytt values in three separate files, so a mismatch is
-// easy to introduce and would only surface as a broken install.
-func TestConfigDefinitionRefsResolve(t *testing.T) {
-	names := map[string]string{}
-	var release map[string]any
-
-	for _, doc := range addonDocs(t) {
-		meta := doc["metadata"].(map[string]any)
-		names[doc["kind"].(string)] = meta["name"].(string)
-		if doc["kind"] == "AddonRelease" {
-			release = doc
-		}
+	labels, _ := meta["labels"].(map[string]any)
+	if got, _ := labels[nameLabel].(string); got != addonName {
+		t.Errorf("%s = %q, want %q", nameLabel, got, addonName)
 	}
-
-	spec := release["spec"].(map[string]any)
-
-	addonRef := spec["addonRef"].(map[string]any)["name"].(string)
-	if addonRef != names["Addon"] {
-		t.Errorf("AddonRelease.spec.addonRef.name = %q but the Addon is named %q", addonRef, names["Addon"])
-	}
-
-	acdRef := spec["addonConfigDefinitionRef"].(map[string]any)["name"].(string)
-	if acdRef != names["AddonConfigDefinition"] {
-		t.Errorf("AddonRelease.spec.addonConfigDefinitionRef.name = %q but the definition is named %q",
-			acdRef, names["AddonConfigDefinition"])
-	}
-
-	// The AddonConfig a tenant writes must be named "<cluster>-<addon>", and the
-	// ConfigMap input is discovered as "<cluster>-bootstrap". Those only line up if
-	// the addon is actually called "bootstrap".
-	if !strings.HasSuffix(acdRef, ".kubernetes.vmware.com."+versionOf(t, spec)) {
-		t.Errorf("definition name %q does not follow the <addon>.kubernetes.vmware.com.<version> convention", acdRef)
+	if got, _ := labels[nsLabel].(string); got != addonNamespace {
+		t.Errorf("%s = %q, want %q", nsLabel, got, addonNamespace)
 	}
 }
 
-// TestAddonResourcesSatisfyTheValidatingWebhook pins what
-// addon.validating.vmware.com enforces and the CRD schemas do not: the addon-name
-// label on each of the three, and one namespace shared by all of them including the
-// AddonRelease's refs, since an AddonRelease is rejected when its Addon is elsewhere.
-// Every rule here came from an install rejection.
-func TestAddonResourcesSatisfyTheValidatingWebhook(t *testing.T) {
-	const addonName = "bootstrap"
-	const nameLabel = "addon.kubernetes.vmware.com/addon-name"
-	const nsLabel = "addon.kubernetes.vmware.com/addon-namespace"
+// TestPackageCarriesTheACD checks the delivery mechanism: the built Package carries the
+// ACD in its addon-config-definition annotation as gzip+base64, and it decodes back to
+// the same definition. This is how the manager receives our hand-written ACD.
+func TestPackageCarriesTheACD(t *testing.T) {
+	// Render the Package the way `make bundle` does: inject a placeholder-free encoded
+	// ACD, then read the annotation back out.
+	acdOut := yttRender(t, "-f", "../addon/addonconfigdefinition.yml", "-f", "../addon/values.yml")
 
-	for _, doc := range addonDocs(t) {
-		kind := doc["kind"].(string)
-		meta := doc["metadata"].(map[string]any)
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	_, _ = w.Write(acdOut)
+	_ = w.Close()
+	encoded := base64.StdEncoding.EncodeToString(gz.Bytes())
 
-		if ns, _ := meta["namespace"].(string); ns != addonNamespace {
-			t.Errorf("%s is created in namespace %q, want %q", kind, ns, addonNamespace)
-		}
-
-		labels, _ := meta["labels"].(map[string]any)
-		if got, _ := labels[nameLabel].(string); got != addonName {
-			t.Errorf("%s has %s = %q, want %q", kind, nameLabel, got, addonName)
-		}
-		if got, _ := labels[nsLabel].(string); got != addonNamespace {
-			t.Errorf("%s has %s = %q, want %q", kind, nsLabel, got, addonNamespace)
-		}
-
-		if kind != "AddonRelease" {
-			continue
-		}
-		spec := doc["spec"].(map[string]any)
-		for _, ref := range []string{"addonRef", "addonConfigDefinitionRef"} {
-			ns, _ := spec[ref].(map[string]any)["namespace"].(string)
-			if ns != addonNamespace {
-				t.Errorf("AddonRelease.spec.%s.namespace = %q, want %q", ref, ns, addonNamespace)
-			}
-		}
+	pkgOut := yttRender(t,
+		"-f", "../addon/package.yml", "-f", "../addon/values.yml",
+		"--data-value", "acd_encoded="+encoded,
+		"--data-value", "render_values_schema=x",
+		"--data-value", "render=y",
+	)
+	var pkg map[string]any
+	if err := yaml.Unmarshal(pkgOut, &pkg); err != nil {
+		t.Fatalf("Package is not valid YAML: %v", err)
 	}
-}
-
-// TestAppCarriesTheAddonCRsIntoThePublicNamespace pins the wiring the whole install
-// depends on. The App must not set a namespace rewrite of its own, since that is
-// exactly what stops the package applying these resources directly, and it must run as
-// the service account the ClusterRoleBinding grants rights to.
-func TestAppCarriesTheAddonCRsIntoThePublicNamespace(t *testing.T) {
-	var app, clusterRole, binding map[string]any
-	for _, doc := range renderedDocs(t) {
-		switch doc["kind"] {
-		case "App":
-			app = doc
-		case "ClusterRole":
-			clusterRole = doc
-		case "ClusterRoleBinding":
-			binding = doc
-		}
-	}
-	if app == nil || clusterRole == nil || binding == nil {
-		t.Fatal("the package must ship an App, a ClusterRole and a ClusterRoleBinding")
-	}
-
-	spec := app["spec"].(map[string]any)
-
-	if _, found := spec["defaultNamespace"]; found {
-		t.Error("App sets spec.defaultNamespace; that rewrites the addon CRs out of the public namespace")
-	}
-	if deploy, ok := spec["deploy"].([]any); ok && len(deploy) > 0 {
-		if kapp, ok := deploy[0].(map[string]any)["kapp"].(map[string]any); ok {
-			for _, f := range []string{"intoNs", "mapNs"} {
-				if _, found := kapp[f]; found {
-					t.Errorf("App sets deploy.kapp.%s; that rewrites the addon CRs out of the public namespace", f)
-				}
-			}
-		}
-	}
-
-	sa, _ := spec["serviceAccountName"].(string)
-	if sa == "" {
-		t.Fatal("App has no serviceAccountName, so it has no rights in the public namespace")
-	}
-	subjects := binding["subjects"].([]any)
-	if got := subjects[0].(map[string]any)["name"].(string); got != sa {
-		t.Errorf("ClusterRoleBinding binds %q but the App runs as %q", got, sa)
-	}
-
-	// The verbs kapp needs to create the CRs, correct drift and delete them on removal.
-	rule := clusterRole["rules"].([]any)[0].(map[string]any)
-	verbs := map[string]bool{}
-	for _, v := range rule["verbs"].([]any) {
-		verbs[v.(string)] = true
-	}
-	for _, needed := range []string{"create", "update", "delete", "get", "list"} {
-		if !verbs[needed] {
-			t.Errorf("ClusterRole is missing the %q verb", needed)
-		}
-	}
-	resources := map[string]bool{}
-	for _, r := range rule["resources"].([]any) {
-		resources[r.(string)] = true
-	}
-	for _, needed := range []string{"addons", "addonreleases", "addonconfigdefinitions"} {
-		if !resources[needed] {
-			t.Errorf("ClusterRole does not cover %q", needed)
-		}
-	}
-}
-
-func versionOf(t *testing.T, spec map[string]any) string {
-	t.Helper()
-	v, ok := spec["version"].(string)
+	annos := pkg["metadata"].(map[string]any)["annotations"].(map[string]any)
+	got, ok := annos["addons.kubernetes.vmware.com/addon-config-definition"].(string)
 	if !ok {
-		t.Fatal("AddonRelease has no spec.version")
+		t.Fatal("Package has no addon-config-definition annotation")
 	}
-	return v
+
+	raw, err := base64.StdEncoding.DecodeString(got)
+	if err != nil {
+		t.Fatalf("annotation is not base64: %v", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("annotation is not gzip: %v", err)
+	}
+	decoded, _ := io.ReadAll(r)
+
+	var back map[string]any
+	if err := yaml.Unmarshal(decoded, &back); err != nil {
+		t.Fatalf("decoded annotation is not valid YAML: %v", err)
+	}
+	if back["kind"] != "AddonConfigDefinition" {
+		t.Errorf("decoded annotation is a %v, want AddonConfigDefinition", back["kind"])
+	}
 }
