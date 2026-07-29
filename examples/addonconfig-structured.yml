@@ -4,10 +4,10 @@
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonConfig
 metadata:
-  name: my-cluster-bootstrap
+  name: my-cluster-dayzero
   namespace: my-namespace
   labels:
-    app.kubernetes.io/name: bootstrap
+    app.kubernetes.io/name: dayzero
   annotations:
     clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
 spec:

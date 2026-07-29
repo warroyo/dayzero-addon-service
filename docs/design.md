@@ -56,7 +56,7 @@ generated `AddonRelease`.
 The tenant payload flows as data, in three hops:
 
 1. A tenant writes resources in `AddonConfig.spec.values` (`resources`, `resourcesYaml`,
-   or a `<cluster>-bootstrap` ConfigMap).
+   or a `<cluster>-dayzero` ConfigMap).
 2. The ACD's output template renders those into a values `Secret`. The addon controller
    wires that Secret into the guest `PackageInstall` as its values.
 3. The package's ytt reads the values and emits the resources; kapp applies them.
@@ -94,7 +94,7 @@ templated in place:
 
 So an output template must not contain `apiVersion`, `kind`, or `metadata`, and it is one
 resource per output entry. `name` and `namespace` are templatable (this project uses
-`{{.Cluster.name}}-bootstrap-data-values`), but the GVK is a static literal. That is why
+`{{.Cluster.name}}-dayzero-data-values`), but the GVK is a static literal. That is why
 the addon cannot emit arbitrary payload kinds directly, and why the package renders them
 instead.
 

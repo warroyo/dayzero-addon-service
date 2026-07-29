@@ -3,7 +3,7 @@
 
 #! Addon name. Tenants reference this from AddonInstall.spec.addonRef and it forms the
 #! required "<cluster-name>-<addon-name>" AddonConfig name.
-addon_name: "bootstrap"
+addon_name: "dayzero"
 
 #! Addon / package version.
 addon_version: "1.0.0"

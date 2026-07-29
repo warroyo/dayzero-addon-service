@@ -1,4 +1,4 @@
-module github.com/warroyo/bootstrap-addon-service/test
+module github.com/warroyo/dayzero-addon-service/test
 
 go 1.23
 

@@ -9,7 +9,7 @@
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepository
 metadata:
-  name: bootstrap-addon-repo
+  name: dayzero-addon-repo
   namespace: vmware-system-vks-public
   annotations:
     # Required by addonrepositories.validating.vmware.com. Must list the packages the
@@ -18,22 +18,22 @@ metadata:
       {
         "repositoryVersion": "1.0.0",
         "packages": {
-          "bootstrap.kubernetes.vmware.com": { "versions": ["1.0.0"] }
+          "dayzero.kubernetes.vmware.com": { "versions": ["1.0.0"] }
         }
       }
 spec:
   fetch:
     imgpkgBundle:
-      imageURL: ghcr.io/warroyo/bootstrap-addon-repo:1.0.0
-  targetRepositoryName: bootstrap-addon-repo
+      imageURL: ghcr.io/warroyo/dayzero-addon-repo:1.0.0
+  targetRepositoryName: dayzero-addon-repo
   version: 1.0.0
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall
 metadata:
-  name: bootstrap-addon-repo-install
+  name: dayzero-addon-repo-install
   namespace: vmware-system-vks-public
 spec:
   addonRepositoryRef:
-    name: bootstrap-addon-repo
+    name: dayzero-addon-repo
     namespace: vmware-system-vks-public

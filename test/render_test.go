@@ -104,7 +104,7 @@ func renderTemplate(t *testing.T, tmpl string, values, deps map[string]any) stri
 		"Values":       values,
 		"Dependencies": deps,
 		"Cluster":      map[string]any{"name": "dev1-cluster"},
-		"Addon":        map[string]any{"name": "bootstrap"},
+		"Addon":        map[string]any{"name": "dayzero"},
 	}
 	var out bytes.Buffer
 	if err := parsed.Execute(&out, ctx); err != nil {
@@ -229,7 +229,7 @@ func TestFullRoundTrip(t *testing.T) {
 	}
 
 	configMap := map[string]any{
-		"bootstrapConfigMap": map[string]any{
+		"dayzeroConfigMap": map[string]any{
 			"data": map[string]any{
 				"rbac.yaml": "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: deployer\n  namespace: team-a\n",
 			},

@@ -29,7 +29,7 @@ which is exactly the handover this addon removes.
    then label the clusters to seed:
 
 ```sh
-kubectl label cluster my-cluster addons.kubernetes.vmware.com/bootstrap=enabled
+kubectl label cluster my-cluster addons.kubernetes.vmware.com/dayzero=enabled
 ```
 
 Clusters created later with that label are seeded during provisioning, with no manual
@@ -44,7 +44,7 @@ an edit to the `AddonConfig`, with no rebuild, version bump or re-upload, and
 kapp-controller prunes resources you remove from it.
 
 Use `values.resources` (structured, as here) when the payload is authored alongside
-the `AddonConfig`; use a `<cluster-name>-bootstrap` ConfigMap when it is large or
+the `AddonConfig`; use a `<cluster-name>-dayzero` ConfigMap when it is large or
 managed separately. The two compose.
 
 ## Credentials
@@ -60,13 +60,13 @@ by different routes.
 On the Supervisor, template rendering failures show up here:
 
 ```sh
-kubectl -n my-namespace get clusteraddon my-cluster-bootstrap -o yaml
+kubectl -n my-namespace get clusteraddon my-cluster-dayzero -o yaml
 ```
 
 In the workload cluster, the apply log is on the guest `PackageInstall`:
 
 ```sh
-kubectl -n vmware-system-tkg get pkgi my-cluster-bootstrap -o yaml   # status.usefulErrorMessage
+kubectl -n vmware-system-tkg get pkgi my-cluster-dayzero -o yaml   # status.usefulErrorMessage
 kubectl get ns team-a
 kubectl -n team-a get sa,rolebinding,resourcequota
 ```

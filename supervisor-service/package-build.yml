@@ -2,7 +2,7 @@ apiVersion: kctrl.carvel.dev/v1alpha1
 kind: PackageBuild
 metadata:
   creationTimestamp: null
-  name: bootstrap-addon.fling.vsphere.vmware.com
+  name: dayzero-addon.fling.vsphere.vmware.com
 spec:
   release:
   - resource: {}
@@ -19,7 +19,7 @@ spec:
           - kbld: {}
       export:
       - imgpkgBundle:
-          image: ghcr.io/warroyo/bootstrap-addon-service-wrapper
+          image: ghcr.io/warroyo/dayzero-addon-service-wrapper
           useKbldImagesLock: true
         includePaths:
         - config

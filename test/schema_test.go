@@ -119,7 +119,7 @@ func TestSchemaValidationHasTeeth(t *testing.T) {
 func TestACDSatisfiesTheValidatingWebhook(t *testing.T) {
 	const (
 		addonNamespace = "vmware-system-vks-public"
-		addonName      = "bootstrap"
+		addonName      = "dayzero"
 		nameLabel      = "addon.kubernetes.vmware.com/addon-name"
 		nsLabel        = "addon.kubernetes.vmware.com/addon-namespace"
 	)

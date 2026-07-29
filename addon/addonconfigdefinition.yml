@@ -49,10 +49,10 @@ spec:
 
   templateInputResources:
   #! Optional: the payload must still render when no ConfigMap exists.
-  - inputName: bootstrapConfigMap
+  - inputName: dayzeroConfigMap
     apiVersion: v1
     kind: ConfigMap
-    name: '{{.Cluster.name}}-bootstrap'
+    name: '{{.Cluster.name}}-dayzero'
     scope: Namespace
     constraints:
     - operator: optional
@@ -67,7 +67,7 @@ spec:
       referenceType: ValuesRef
     template: |
       {{- $rawYaml := .Values.resourcesYaml | default "" -}}
-      {{- if .Dependencies }}{{- if .Dependencies.bootstrapConfigMap }}{{- range $k, $v := .Dependencies.bootstrapConfigMap.data }}
+      {{- if .Dependencies }}{{- if .Dependencies.dayzeroConfigMap }}{{- range $k, $v := .Dependencies.dayzeroConfigMap.data }}
       {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
       {{- end }}{{- end }}{{- end }}
       stringData:
@@ -85,7 +85,7 @@ spec:
       namespace: #@ data.values.guest_package_namespace
     template: |
       {{- $rawYaml := .Values.resourcesYaml | default "" -}}
-      {{- if .Dependencies }}{{- if .Dependencies.bootstrapConfigMap }}{{- range $k, $v := .Dependencies.bootstrapConfigMap.data }}
+      {{- if .Dependencies }}{{- if .Dependencies.dayzeroConfigMap }}{{- range $k, $v := .Dependencies.dayzeroConfigMap.data }}
       {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
       {{- end }}{{- end }}{{- end }}
       stringData:

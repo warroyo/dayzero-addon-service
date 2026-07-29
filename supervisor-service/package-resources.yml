@@ -2,9 +2,9 @@ apiVersion: data.packaging.carvel.dev/v1alpha1
 kind: Package
 metadata:
   creationTimestamp: null
-  name: bootstrap-addon.fling.vsphere.vmware.com.0.0.0
+  name: dayzero-addon.fling.vsphere.vmware.com.0.0.0
 spec:
-  refName: bootstrap-addon.fling.vsphere.vmware.com
+  refName: dayzero-addon.fling.vsphere.vmware.com
   releasedAt: null
   template:
     spec:
@@ -26,9 +26,9 @@ apiVersion: data.packaging.carvel.dev/v1alpha1
 kind: PackageMetadata
 metadata:
   creationTimestamp: null
-  name: bootstrap-addon.fling.vsphere.vmware.com
+  name: dayzero-addon.fling.vsphere.vmware.com
 spec:
-  displayName: Cluster Bootstrap YAML
+  displayName: Cluster Day-Zero Config
   shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
   longDescription: Installs the AddonRepository that registers a VKS addon for applying
     operator-supplied Kubernetes YAML into a workload cluster as it is provisioned:
@@ -46,13 +46,13 @@ metadata:
   annotations:
     kctrl.carvel.dev/local-fetch-0: .
   creationTimestamp: null
-  name: bootstrap-addon
+  name: dayzero-addon
 spec:
   packageRef:
-    refName: bootstrap-addon.fling.vsphere.vmware.com
+    refName: dayzero-addon.fling.vsphere.vmware.com
     versionSelection:
       constraints: 0.0.0
-  serviceAccountName: bootstrap-addon-sa
+  serviceAccountName: dayzero-addon-sa
 status:
   conditions: null
   friendlyDescription: ""

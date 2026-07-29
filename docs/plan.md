@@ -6,7 +6,7 @@ Read [`design.md`](./design.md) first for the API constraints behind everything 
 ## Layout
 
 ```
-bootstrap-addon-service/
+dayzero-addon-service/
 ├── Makefile                       # bundle / render / test / push
 ├── addon/                         # source for the addon-repository bundle
 │   ├── values.yml                 # ytt data values (name, version, k8s constraints)

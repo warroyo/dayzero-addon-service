@@ -10,21 +10,21 @@
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepository
 metadata:
-  name: bootstrap-addon-repo
+  name: dayzero-addon-repo
   annotations:
     addons.kubernetes.vmware.com/package-offerings: #@ json.encode(offerings)
 spec:
   fetch:
     imgpkgBundle:
       imageURL: #@ data.values.addon_repo_image
-  targetRepositoryName: bootstrap-addon-repo
+  targetRepositoryName: dayzero-addon-repo
   version: #@ data.values.repository_version
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall
 metadata:
-  name: bootstrap-addon-repo-install
+  name: dayzero-addon-repo-install
 spec:
   addonRepositoryRef:
-    name: bootstrap-addon-repo
+    name: dayzero-addon-repo
     namespace: #@ data.values.namespace

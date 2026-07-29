@@ -47,14 +47,14 @@ kubectl apply -f install/addonrepository.yml
 ## Step 3: did the manager materialise the addon? (the gating question)
 
 ```sh
-kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
+kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep dayzero
 ```
 
 All three should appear. If they do not, read the repository install status:
 
 ```sh
 kubectl -n vmware-system-vks-public get addonrepositoryinstall \
-  bootstrap-addon-repo-install -o jsonpath='{.status.usefulErrorMessage}'
+  dayzero-addon-repo-install -o jsonpath='{.status.usefulErrorMessage}'
 ```
 
 A fetch error means the bundle is unreachable or the `imageURL` is wrong. A validation
@@ -65,7 +65,7 @@ check its status against the shape in `design.md`.
 Confirm the ACD came through intact:
 
 ```sh
-kubectl -n vmware-system-vks-public get acd bootstrap.kubernetes.vmware.com.1.0.0 \
+kubectl -n vmware-system-vks-public get acd dayzero.kubernetes.vmware.com.1.0.0 \
   -o jsonpath='{.spec.schema.openAPIV3Schema.properties}'
 ```
 
@@ -76,7 +76,7 @@ It should show `resources` and `resourcesYaml`, our schema, not a generated one.
 Into the cluster's Supervisor namespace, apply:
 
 1. [`examples/addonconfig-structured.yml`](../examples/addonconfig-structured.yml),
-   renamed to `<cluster>-bootstrap`, starting with a trivial payload (one ConfigMap in
+   renamed to `<cluster>-dayzero`, starting with a trivial payload (one ConfigMap in
    `default` is enough).
 2. [`examples/addoninstall.yml`](../examples/addoninstall.yml), then label the cluster.
 
@@ -85,14 +85,14 @@ If the `ClusterAddon` never appears, check the `AddonInstall` status first.
 ## Step 5: watch reconciliation on the Supervisor
 
 ```sh
-kubectl -n <cluster-ns> get clusteraddon <cluster>-bootstrap -o yaml
+kubectl -n <cluster-ns> get clusteraddon <cluster>-dayzero -o yaml
 ```
 
 Template rendering failures surface here, in the conditions. This is the primary debugging
 surface for the ACD. Confirm the values Secret was produced:
 
 ```sh
-kubectl -n <cluster-ns> get secret <cluster>-bootstrap-data-values -o jsonpath='{.data.values\.yaml}' | base64 -d
+kubectl -n <cluster-ns> get secret <cluster>-dayzero-data-values -o jsonpath='{.data.values\.yaml}' | base64 -d
 ```
 
 It should carry `resourcesJson` and `resourcesYaml`.
@@ -100,7 +100,7 @@ It should carry `resourcesJson` and `resourcesYaml`.
 ## Step 6: confirm in the guest cluster
 
 ```sh
-kubectl -n vmware-system-tkg get pkgi <cluster>-bootstrap -o yaml   # status.usefulErrorMessage on failure
+kubectl -n vmware-system-tkg get pkgi <cluster>-dayzero -o yaml   # status.usefulErrorMessage on failure
 kubectl -n default get configmap <payload>
 ```
 
@@ -109,7 +109,7 @@ The `PackageInstall` should reconcile, and the payload resources should be prese
 ## Step 7: the payload sources and lifecycle
 
 - Each source alone and combined: `values.resources`, `values.resourcesYaml`, and a
-  `<cluster>-bootstrap` ConfigMap. An `AddonConfig` with `values: {}` and no ConfigMap
+  `<cluster>-dayzero` ConfigMap. An `AddonConfig` with `values: {}` and no ConfigMap
   should reconcile to an empty payload, not error.
 - Edit the payload: the `PackageInstall` re-reconciles and prunes resources removed from it.
 - Delete the `AddonInstall`: the payload is cleaned up, or retained under

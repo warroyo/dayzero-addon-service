@@ -41,17 +41,17 @@ jobs:
 
       - name: Assemble install manifest for the release
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cp install/addonrepository.yml bootstrap-addonrepository.yml
+        run: cp install/addonrepository.yml dayzero-addonrepository.yml
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: bootstrap-addonrepository.yml
+          files: dayzero-addonrepository.yml
           generate_release_notes: true
           body: |
             The addon-repository bundle for this release is published to
-            `ghcr.io/warroyo/bootstrap-addon-repo:${{ env.VERSION }}`.
+            `ghcr.io/warroyo/dayzero-addon-repo:${{ env.VERSION }}`.
 
-            Install by applying `bootstrap-addonrepository.yml` (point `imageURL` at the
+            Install by applying `dayzero-addonrepository.yml` (point `imageURL` at the
             bundle above), or via the Supervisor Service in `supervisor-service/`.

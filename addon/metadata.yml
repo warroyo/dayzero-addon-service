@@ -5,7 +5,7 @@ kind: PackageMetadata
 metadata:
   name: #@ "{}.kubernetes.vmware.com".format(data.values.addon_name)
 spec:
-  displayName: Cluster Bootstrap YAML
+  displayName: Cluster Day-Zero Config
   shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
   longDescription: >-
     Applies operator-supplied Kubernetes YAML into a workload cluster as it is

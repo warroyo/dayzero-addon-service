@@ -1,24 +1,24 @@
-# Attaches the bootstrap addon to every cluster in this Supervisor namespace that
-# carries the label addons.kubernetes.vmware.com/bootstrap: enabled.
+# Attaches the dayzero addon to every cluster in this Supervisor namespace that
+# carries the label addons.kubernetes.vmware.com/dayzero: enabled.
 #
 # Apply this once per Supervisor namespace. Any cluster created afterwards with the
 # label is seeded during provisioning, which is the point of the whole service.
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonInstall
 metadata:
-  name: bootstrap-addoninstall
+  name: dayzero-addoninstall
   namespace: my-namespace
   labels:
-    app.kubernetes.io/name: bootstrap
+    app.kubernetes.io/name: dayzero
 spec:
   # No namespace: addonRef falls back to the public addon catalog, which is where the
   # addon system requires an Addon to live.
   addonRef:
-    name: bootstrap
+    name: dayzero
   clusters:
   - selector:
       matchExpressions:
-      - key: addons.kubernetes.vmware.com/bootstrap
+      - key: addons.kubernetes.vmware.com/dayzero
         operator: In
         values:
         - enabled

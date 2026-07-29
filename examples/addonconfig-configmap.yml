@@ -2,13 +2,13 @@
 # payload is large (an AddonConfig is still an etcd object, so ~1MB is the ceiling) or
 # when the payload is managed by a different pipeline from the AddonConfig.
 #
-# The ConfigMap name is fixed by convention: "<cluster-name>-bootstrap", in the
+# The ConfigMap name is fixed by convention: "<cluster-name>-dayzero", in the
 # cluster's Supervisor namespace. Every key becomes a file applied to the cluster.
 # The lookup is optional, so an AddonConfig with no matching ConfigMap still works.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: my-cluster-bootstrap
+  name: my-cluster-dayzero
   namespace: my-namespace
 data:
   00-namespace.yaml: |
@@ -42,10 +42,10 @@ data:
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonConfig
 metadata:
-  name: my-cluster-bootstrap
+  name: my-cluster-dayzero
   namespace: my-namespace
   labels:
-    app.kubernetes.io/name: bootstrap
+    app.kubernetes.io/name: dayzero
   annotations:
     clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
 spec:

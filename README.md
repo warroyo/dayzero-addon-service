@@ -1,4 +1,4 @@
-# bootstrap-addon-service
+# dayzero-addon-service
 
 A VKS addon whose only job is to apply operator-supplied Kubernetes YAML into a workload
 cluster at provisioning time: namespaces, service accounts, RBAC, resource quotas and
@@ -76,7 +76,7 @@ places them in its own namespace, where the manager reconciles them.
 ### Confirm it registered
 
 ```sh
-kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep bootstrap
+kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep dayzero
 ```
 
 ## Usage
@@ -87,10 +87,10 @@ First, attach the addon, once per namespace. See
 [`examples/addoninstall.yml`](examples/addoninstall.yml). Then label the clusters to seed:
 
 ```sh
-kubectl label cluster my-cluster addons.kubernetes.vmware.com/bootstrap=enabled
+kubectl label cluster my-cluster addons.kubernetes.vmware.com/dayzero=enabled
 ```
 
-Second, supply the payload: an `AddonConfig` named `<cluster-name>-bootstrap`, carrying
+Second, supply the payload: an `AddonConfig` named `<cluster-name>-dayzero`, carrying
 the annotation `clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"`.
 Both the name and the annotation are load-bearing. The name is how the addon system pairs
 config to cluster, and without the annotation the `AddonConfig` outlives the
@@ -103,7 +103,7 @@ Two payload sources, which compose:
 | Structured | `values.resources` | Payload is authored with the AddonConfig. Diffable. ([example](examples/addonconfig-structured.yml)) |
 | Raw string | `values.resourcesYaml` | Pasting manifests you already have. ([example](examples/addonconfig-inline.yml)) |
 
-A `<cluster-name>-bootstrap` ConfigMap in the same namespace also folds in, for payloads
+A `<cluster-name>-dayzero` ConfigMap in the same namespace also folds in, for payloads
 managed by a separate pipeline ([example](examples/addonconfig-configmap.yml)).
 
 ### Security posture
