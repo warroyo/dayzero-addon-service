@@ -5,10 +5,8 @@ cluster at provisioning time: namespaces, service accounts, RBAC, resource quota
 other day-zero configuration. Tenants attach it per cluster and supply the payload as
 data, with no workload-cluster kubeconfig and no artifact authored per payload.
 
-> Status: built, not yet verified against a live Supervisor end to end. The render logic
-> is covered by tests (`make test`), and the guest-side mechanism is validated directly
-> in a cluster (see [`docs/verify.md`](docs/verify.md)). The one unproven step is the
-> `AddonRepository` round trip, which needs a published bundle.
+> Status: verified end to end against a live Supervisor, including the `AddonRepository`
+> round trip. See [`docs/verify.md`](docs/verify.md) for the runbook.
 
 ## How it works
 
