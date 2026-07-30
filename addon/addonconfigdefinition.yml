@@ -38,6 +38,7 @@ spec:
           description: >-
             Kubernetes resources to apply into the cluster, as structured YAML. Each
             item is one complete resource.
+          default: []
           items:
             type: object
             x-kubernetes-preserve-unknown-fields: true
@@ -46,6 +47,7 @@ spec:
           description: >-
             Kubernetes resources to apply into the cluster, as a single raw
             multi-document YAML string.
+          default: ""
 
   templateInputResources:
   #! Optional: the payload must still render when no ConfigMap exists.

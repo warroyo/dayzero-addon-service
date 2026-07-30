@@ -1,7 +1,7 @@
 ADDON_NAME    := dayzero
 PKG_REF       := $(ADDON_NAME).kubernetes.vmware.com
 ADDON_REPO    := ghcr.io/warroyo/dayzero-addon-repo
-VERSION       ?= 1.0.0
+VERSION       ?= 1.0.1
 BUNDLE        := build/bundle
 PKG_DIR       := $(BUNDLE)/packages/$(PKG_REF)
 

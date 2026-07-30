@@ -8,6 +8,7 @@ package test
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,16 +93,25 @@ func controllerFuncs() template.FuncMap {
 	return funcs
 }
 
+// withSchemaDefaults fills in the ACD's schema defaults for keys the caller left unset,
+// the way CRD defaulting does at the apiserver before the controller ever sees the
+// object. resources defaults to [] and resourcesYaml to "".
+func withSchemaDefaults(values map[string]any) map[string]any {
+	out := map[string]any{"resources": []any{}, "resourcesYaml": ""}
+	maps.Copy(out, values)
+	return out
+}
+
 // renderTemplate evaluates one output's Go template with the context roots the addon
 // controller provides.
 func renderTemplate(t *testing.T, tmpl string, values, deps map[string]any) string {
 	t.Helper()
-	parsed, err := template.New("out").Funcs(controllerFuncs()).Parse(tmpl)
+	parsed, err := template.New("out").Option("missingkey=error").Funcs(controllerFuncs()).Parse(tmpl)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	ctx := map[string]any{
-		"Values":       values,
+		"Values":       withSchemaDefaults(values),
 		"Dependencies": deps,
 		"Cluster":      map[string]any{"name": "dev1-cluster"},
 		"Addon":        map[string]any{"name": "dayzero"},

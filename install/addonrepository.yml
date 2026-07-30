@@ -16,17 +16,17 @@ metadata:
     # bundle actually offers.
     addons.kubernetes.vmware.com/package-offerings: |
       {
-        "repositoryVersion": "1.0.0",
+        "repositoryVersion": "1.0.1",
         "packages": {
-          "dayzero.kubernetes.vmware.com": { "versions": ["1.0.0"] }
+          "dayzero.kubernetes.vmware.com": { "versions": ["1.0.1"] }
         }
       }
 spec:
   fetch:
     imgpkgBundle:
-      imageURL: ghcr.io/warroyo/dayzero-addon-repo:1.0.0
+      imageURL: ghcr.io/warroyo/dayzero-addon-repo:1.0.1
   targetRepositoryName: dayzero-addon-repo
-  version: 1.0.0
+  version: 1.0.1
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall
