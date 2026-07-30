@@ -16,20 +16,39 @@ The addon ships as a Carvel package repository. An administrator points an
 attach the addon with an `AddonInstall` and supply YAML through an `AddonConfig` per
 cluster.
 
-```
-Registry                         Supervisor                      Workload cluster
-────────                         ──────────                      ────────────────
-addon-repo bundle  ──fetch──►    AddonRepository
-  Package                        AddonRepositoryInstall
-  + ACD (annotation)                    │ manager
-                                        ▼
-                                 Addon, AddonRelease, ACD        (in vks-public)
-                                        │
-  tenant: AddonInstall ─────────────────┤
-          AddonConfig ─── values ──────►│ addon controller
-                                        └──► values Secret ──►   PackageInstall
-                                                                   └─ ytt renders your
-                                                                      YAML, kapp applies
+```mermaid
+flowchart LR
+  subgraph registry["Registry"]
+    BUNDLE["addon-repo bundle<br/>Package + ACD (annotation)"]
+  end
+
+  subgraph supervisor["Supervisor"]
+    REPO["AddonRepository<br/>AddonRepositoryInstall"]
+    MAT["Addon, AddonRelease, ACD<br/><i>in vmware-system-vks-public</i>"]
+    AINST["tenant: AddonInstall"]
+    ACFG["AddonConfig<br/>spec.values"]
+    SECRET["values Secret"]
+  end
+
+  subgraph guest["Workload cluster"]
+    PI["PackageInstall"]
+    RENDER["ytt renders your YAML,<br/>kapp applies"]
+  end
+
+  BUNDLE -->|fetch| REPO
+  REPO -->|manager| MAT
+  AINST --> ACFG
+  MAT -.->|addon controller| ACFG
+  ACFG -->|values| SECRET
+  SECRET --> PI
+  PI --> RENDER
+
+  classDef locked fill:#fde2e2,stroke:#c0392b,color:#111
+  classDef tenantc fill:#e3f2fd,stroke:#1565c0,color:#111
+  classDef guestc fill:#e8f5e9,stroke:#2e7d32,color:#111
+  class MAT locked
+  class AINST,ACFG tenantc
+  class PI,RENDER guestc
 ```
 
 The payload flows as data: what a tenant writes in `AddonConfig.spec.values` is rendered
