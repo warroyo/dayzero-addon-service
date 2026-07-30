@@ -147,6 +147,7 @@ install manifest to a GitHub release.
 
 | | |
 |---|---|
+| [`docs/architecture.md`](docs/architecture.md) | How the VKS addon kinds fit together, with a diagram. Generic to any addon |
 | [`docs/design.md`](docs/design.md) | The API constraints, why the design is shaped this way, alternatives rejected |
 | [`docs/verify.md`](docs/verify.md) | End-to-end verification runbook |
 | [`docs/plan.md`](docs/plan.md) | Repo layout and build mechanics |

@@ -4,8 +4,10 @@ How the VKS addon API constrains this project and why the code is shaped the way
 Established against the Broadcom VKS API reference, the Carvel docs, and a live Supervisor
 and guest cluster (VKS 3.7). Read this before touching `addon/`.
 
-For the package-free, fetch-free design this project originally aimed for, and why it is
-blocked today, see [`future-direct-creation.md`](./future-direct-creation.md).
+For how the addon kinds fit together in general, with a diagram, see
+[`architecture.md`](./architecture.md). For the package-free, fetch-free design this
+project originally aimed for, and why it is blocked today, see
+[`future-direct-creation.md`](./future-direct-creation.md).
 
 ## Why an AddonRepository
 
