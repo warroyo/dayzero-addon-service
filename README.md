@@ -1,12 +1,13 @@
 # dayzero-addon-service
 
+[![Test](https://github.com/warroyo/dayzero-addon-service/actions/workflows/test.yml/badge.svg)](https://github.com/warroyo/dayzero-addon-service/actions/workflows/test.yml)
+[![Build and Release](https://github.com/warroyo/dayzero-addon-service/actions/workflows/build-release.yml/badge.svg)](https://github.com/warroyo/dayzero-addon-service/actions/workflows/build-release.yml)
+[![Latest release](https://img.shields.io/github/v/release/warroyo/dayzero-addon-service)](https://github.com/warroyo/dayzero-addon-service/releases/latest)
+
 A VKS addon whose only job is to apply operator-supplied Kubernetes YAML into a workload
 cluster at provisioning time: namespaces, service accounts, RBAC, resource quotas and
 other day-zero configuration. Tenants attach it per cluster and supply the payload as
 data, with no workload-cluster kubeconfig and no artifact authored per payload.
-
-> Status: verified end to end against a live Supervisor, including the `AddonRepository`
-> round trip. See [`docs/verify.md`](docs/verify.md) for the runbook.
 
 ## How it works
 
