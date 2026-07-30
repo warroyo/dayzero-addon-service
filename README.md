@@ -57,17 +57,6 @@ into a values Secret, which feeds the guest package, whose ytt turns it back int
 resources and applies them. Changing the payload is an edit to the `AddonConfig`, with no
 rebuild, version bump or re-upload.
 
-### Why an AddonRepository and not a direct install
-
-`Addon` and `AddonRelease` are owned by the VKS addon manager: validating webhooks reject
-creation from any client that is not the manager's own service account, and RBAC does not
-change that. The only supported way to get them created is to hand the manager an
-`AddonRepository`. A fuller account, and the design this project originally aimed for, is
-in [`docs/future-direct-creation.md`](docs/future-direct-creation.md).
-
-One consequence: the guest pulls the addon-repository bundle. That fetch is unavoidable
-through the addon system, so this addon does not try to avoid it. The bundle is
-config-only (empty ImagesLock), so relocation for air-gap is just the bundle itself.
 
 ## Install
 
