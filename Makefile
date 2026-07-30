@@ -13,7 +13,7 @@ render: bundle
 	@echo "--- Package ($(PKG_DIR)/$(VERSION).yml) ---"
 	@cat $(PKG_DIR)/$(VERSION).yml
 	@echo "--- AddonConfigDefinition (decoded from the annotation) ---"
-	@ytt -f addon --data-value addon_version=$(VERSION) -f addon/addonconfigdefinition.yml 2>/dev/null
+	@base64 -d < build/acd.b64 | gunzip
 
 # Assemble the addon-repository imgpkg bundle: a Carvel package repository whose one
 # Package carries the ACD in its addon-config-definition annotation.
