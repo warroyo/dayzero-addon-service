@@ -24,7 +24,7 @@ jobs:
       - name: Install Carvel Tools
         run: |
           curl -L https://carvel.dev/install.sh | sudo bash
-          ytt version && imgpkg version
+          ytt version && imgpkg version && kctrl version
 
       - name: Set Version
         run: |
@@ -35,9 +35,11 @@ jobs:
             echo "VERSION=latest" >> $GITHUB_ENV
           fi
 
-      - name: Push the addon-repository bundle
+      # Publishes the addon-repository bundle and builds the Supervisor Service package
+      # (kctrl pushes the wrapper bundle to ghcr, hence the login above).
+      - name: Build and publish both packages
         if: startsWith(github.ref, 'refs/tags/v')
-        run: make push VERSION=${{ env.VERSION }}
+        run: make release VERSION=${{ env.VERSION }}
 
       - name: Assemble install manifest for the release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -47,11 +49,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: dayzero-addonrepository.yml
+          files: |
+            dayzero-addonrepository.yml
+            dayzero-addon.yml
           generate_release_notes: true
           body: |
             The addon-repository bundle for this release is published to
             `ghcr.io/warroyo/dayzero-addon-repo:${{ env.VERSION }}`.
 
-            Install by applying `dayzero-addonrepository.yml` (point `imageURL` at the
-            bundle above), or via the Supervisor Service in `supervisor-service/`.
+            Two ways to install, both pointing at that bundle:
+
+            - **Supervisor Service**: download `dayzero-addon.yml` and upload it through
+              **Workload Management → Services → Add Service**.
+            - **Direct apply**: `kubectl apply -f dayzero-addonrepository.yml`.

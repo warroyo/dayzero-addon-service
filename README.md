@@ -60,25 +60,38 @@ rebuild, version bump or re-upload.
 
 ## Install
 
-Two methods. Both point at the same published bundle; pick the one that fits how the
-Supervisor is administered.
+Two methods. Both install the same two CRs pointing at the same published bundle; pick the
+one that fits how the Supervisor is administered. Each
+[release](https://github.com/warroyo/dayzero-addon-service/releases/latest) ships the
+artifact for both, already stamped with that release's bundle version.
 
-### Method 1: apply the AddonRepository directly
+### Method 1: the Supervisor Service
 
-For admins with Supervisor `kubectl` access. Edit
-[`install/addonrepository.yml`](install/addonrepository.yml) so `imageURL` points at your
-published bundle, then:
+For environments where services are installed through the vCenter catalog. Download
+`dayzero-addon.yml` from the [latest
+release](https://github.com/warroyo/dayzero-addon-service/releases/latest):
 
 ```sh
-kubectl apply -f install/addonrepository.yml
+gh release download --repo warroyo/dayzero-addon-service --pattern dayzero-addon.yml
 ```
 
-### Method 2: the Supervisor Service
+Then upload it through **Workload Management → Services → Add Service** and create a
+service instance. The deploy places the two CRs in the service's own namespace, where the
+manager reconciles them. Nothing to edit: the bundle image and versions are already set as
+the package's values defaults, overridable from the service config form.
 
-For environments where services are installed through the vCenter catalog. Build the
-service package in [`supervisor-service/`](supervisor-service/) and upload it through
-**Workload Management → Services → Add Service**. It carries the same two CRs; the deploy
-places them in its own namespace, where the manager reconciles them.
+### Method 2: apply the AddonRepository directly
+
+For admins with Supervisor `kubectl` access. Download `dayzero-addonrepository.yml` from
+the same release and apply it:
+
+```sh
+gh release download --repo warroyo/dayzero-addon-service --pattern dayzero-addonrepository.yml
+kubectl apply -f dayzero-addonrepository.yml
+```
+
+[`install/addonrepository.yml`](install/addonrepository.yml) is the same file in-tree, for
+pointing `imageURL` at a bundle you published yourself.
 
 ### Confirm it registered
 
@@ -133,10 +146,12 @@ container images and belong in their own addon or chart.
 ## Development
 
 ```sh
-make bundle    # assemble the addon-repository bundle (build/bundle)
-make render    # inspect the Package and the ACD it carries
-make test      # render the ACD templates and the package ytt, validate against CRD schemas
-make push      # publish the bundle to the registry
+make bundle              # assemble the addon-repository bundle (build/bundle)
+make render              # inspect the Package and the ACD it carries
+make test                # render the ACD templates and the package ytt, validate against CRD schemas
+make push                # publish the bundle to the registry
+make supervisor-service  # build the Supervisor Service package -> dayzero-addon.yml
+make release             # both: push the bundle and build the service package
 ```
 
 `make test` renders the AddonConfigDefinition's Go templates the way the addon controller
@@ -147,8 +162,14 @@ validating webhook requires. See [`docs/plan.md`](docs/plan.md).
 
 ### Releasing
 
-Push a `v*` tag. GitHub Actions runs `make push` to publish the bundle and attaches the
-install manifest to a GitHub release.
+Push a `v*` tag. GitHub Actions runs `make release`, which publishes the addon-repository
+bundle and builds the Supervisor Service package, then attaches both `dayzero-addon.yml`
+and `dayzero-addonrepository.yml` to a GitHub release.
+
+`supervisor-service/config/values.yml` is generated from
+[`values.yml.tpl`](supervisor-service/values.yml.tpl) with the release version stamped in,
+so the shipped service cannot point at a bundle version other than the one it was built
+for. Edit the template, not the generated file.
 
 ## Docs
 
