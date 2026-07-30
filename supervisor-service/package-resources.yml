@@ -30,7 +30,10 @@ metadata:
 spec:
   displayName: Cluster Day-Zero Config
   shortDescription: Seed VKS clusters with arbitrary YAML at provisioning time
-  longDescription: Installs the AddonRepository that registers a VKS addon for applying
+  # Block scalar, not a plain one: the first sentence ends in a colon, which a plain
+  # multi-line scalar parses as a mapping key.
+  longDescription: >-
+    Installs the AddonRepository that registers a VKS addon for applying
     operator-supplied Kubernetes YAML into a workload cluster as it is provisioned:
     namespaces, service accounts, RBAC, resource quotas and other day-zero configuration.
     Tenants attach it with an AddonInstall and supply the payload through an AddonConfig,
