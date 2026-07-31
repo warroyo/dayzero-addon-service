@@ -176,5 +176,6 @@ Build, test and release mechanics are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | | |
 |---|---|
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Repo layout, build mechanics, releasing |
+| [`docs/design.md`](docs/design.md) | Why this addon is built the way it is, and what was rejected |
 | [`docs/verify.md`](docs/verify.md) | End-to-end verification runbook |
 | [`examples/`](examples/) | Tenant `AddonInstall` and `AddonConfig`, one per payload source |

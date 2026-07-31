@@ -1,8 +1,9 @@
 # Contributing
 
 How this repository is built, tested and released. For installing and using the addon, see
-the [README](./README.md); for verifying a change end to end on a real Supervisor, see
-[`docs/verify.md`](./docs/verify.md).
+the [README](./README.md); for why it is designed the way it is, see
+[`docs/design.md`](./docs/design.md); for verifying a change end to end on a real
+Supervisor, see [`docs/verify.md`](./docs/verify.md).
 
 The VKS addon system itself — the resource model, the manager-owned webhooks, why an
 `AddonRepository` is the only way in — is not documented here. That is platform knowledge
@@ -46,7 +47,9 @@ dayzero-addon-service/
 │   └── package-resources.yml
 ├── examples/                      # tenant AddonInstall + AddonConfig
 ├── test/                          # renders the ACD templates and the package ytt
-└── docs/verify.md                 # end-to-end verification runbook
+└── docs/
+    ├── design.md                  # why the addon is shaped this way
+    └── verify.md                  # end-to-end verification runbook
 ```
 
 ## One moving tag, three settings
