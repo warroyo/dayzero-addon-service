@@ -1,8 +1,8 @@
 # Verification runbook
 
-Read [`design.md`](./design.md) first for the API constraints this depends on.
+Build and layout are in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-## What is already proven
+## What the tests already cover
 
 Two parts of the chain are validated without a full install, and should stay green.
 
@@ -17,12 +17,10 @@ package with this project's exact render turned per-cluster values into the expe
 resources, with vendir fetching nothing from a registry, and deleting the PackageInstall
 removed what it applied. So once the manager creates the addon, the guest half works.
 
-## The one unproven step
-
-Whether a hand-authored `AddonRepository` makes the manager materialise our ACD and sync
-an inline-content package to the guest. This cannot be tested without a bundle the
-Supervisor can pull, because that is what an `AddonRepository` fetches. Everything downstream
-of it is verified above; this runbook exists to close it.
+**The full chain, on a real Supervisor.** A published catalog registered through an
+`AddonRepository` materialised the `Addon`, `AddonRelease` and ACD, and a tenant
+`AddonInstall` + `AddonConfig` seeded a workload cluster. The steps below are the
+procedure for re-running that after a change, not an open question.
 
 ## Step 1: build and publish the catalog
 
@@ -82,7 +80,7 @@ kubectl -n vmware-system-vks-public get addonrepositoryinstall \
 A fetch error means the bundle is unreachable or the `imageURL` is wrong — for a private
 registry, that the Supervisor cannot pull it. The `package-offerings` annotation is not a
 suspect: it is declarative and never checked against the bundle. If the `AddonRelease` is
-present but rejected, check its status against the shape in `design.md`.
+present but rejected, read its status conditions.
 
 After a release, confirm the moved tag landed rather than assuming it: the new
 `AddonRelease` appears without any CR changing, roughly ten minutes after the push.

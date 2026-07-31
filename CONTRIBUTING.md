@@ -1,7 +1,23 @@
-# Build and layout
+# Contributing
 
-Read [`design.md`](./design.md) first for the API constraints behind everything here.
-[`verify.md`](./verify.md) covers installing and testing the result.
+How this repository is built, tested and released. For installing and using the addon, see
+the [README](./README.md); for verifying a change end to end on a real Supervisor, see
+[`docs/verify.md`](./docs/verify.md).
+
+The VKS addon system itself — the resource model, the manager-owned webhooks, why an
+`AddonRepository` is the only way in — is not documented here. That is platform knowledge
+rather than anything specific to this addon, and it lives in the `vks-addons` skill.
+
+```sh
+make bundle              # stage the catalog for kctrl (build/bundle)
+make render              # inspect one Package and the ACD it carries
+make install-manifest    # render the admin-apply CRs (build/install/addonrepository.yml)
+make check               # assert the bundle serves PKG_VERSIONS and the manifest is release-independent
+make test                # render the ACD templates and the package ytt, validate against CRD schemas
+make push                # publish the catalog: snapshot tag, then move :stable onto it
+make supervisor-service  # kctrl package release -> dayzero-addon.yml
+make release             # check, push the catalog, build the service package
+```
 
 ## Layout
 
@@ -30,7 +46,7 @@ dayzero-addon-service/
 │   └── package-resources.yml
 ├── examples/                      # tenant AddonInstall + AddonConfig
 ├── test/                          # renders the ACD templates and the package ytt
-└── docs/
+└── docs/verify.md                 # end-to-end verification runbook
 ```
 
 ## One moving tag, three settings
@@ -44,25 +60,16 @@ the build keeps three things apart:
 | `PKG_VERSIONS` | Every package version the catalog serves. The single source for the bundle contents |
 | `REPO_VERSION` | The immutable snapshot tag for one publish, plus the Supervisor Service package version. Nothing registered points at it. A `v*` git tag sets it, and it is unrelated to any package version |
 
-A registered `AddonRepository` is frozen by the validating webhook — only
-`spec.addonFilters` is mutable, and that is a helm-repository field, so an imgpkg
-repository cannot be edited at all, `imageURL` and the `package-offerings` annotation
-included, and not even a re-apply of an identical value is allowed. The design routes
-around that rather than paying it per release: the registration is permanent, the tag
-underneath it moves, and the manager re-resolves the tag by itself (measured at 569s). A
-release therefore costs an admin nothing.
+**The one rule to keep in mind when changing the build:** a registered `AddonRepository`
+cannot be modified, so the install manifest has to be byte-identical from one release to
+the next. That is why the names carry no version, `spec.version` is a constant, the
+`imageURL` is a floating tag, and the offerings annotation lists no versions. A release
+delivers by moving the tag, not by reissuing the manifest, and `make check` fails the
+build if anything release-specific creeps back in.
 
-Shipping every version in one catalog is what makes a version bump cheap for consumers on
-top of that. A consumer moving a `releaseFilter` pin between two versions touches nothing
-on the Supervisor, because both `AddonRelease`s already exist.
-
-The remaining cost is that the tag is mutable, so the *registration* no longer identifies
-what it serves. Two things keep that honest: `released/` freezes each package version's
-YAML so the catalog is append-only — a version already published never changes meaning —
-and each publish also gets an immutable snapshot tag, so a deliberate pin is always
-available. VMware's own repositories take the other route (`standard-packages` 3.6 stays
-registered next to `vks-addons` 3.7), which is the right call for a catalog that ships
-with the platform and the wrong one for a catalog that adds a package version a week.
+The corollary is that the catalog must stay **append-only**. The tag moves under a live
+registration, so a version removed from `PKG_VERSIONS` would disappear from clusters
+pinned to it. `released/` keeps every published version frozen for that reason.
 
 ## Two template languages, kept apart
 
@@ -116,8 +123,8 @@ The repo runs both of kctrl's authoring flows, on two different things:
 The `Package` files themselves are rendered by ytt rather than by `kctrl package release
 --repo-output`, because each one has to carry a hand-authored ACD in an annotation and
 fetch its render files inline. kctrl's package flow would build an imgpkg bundle for the
-package contents, which is the guest-side image fetch this design deliberately avoids
-(see [`design.md`](./design.md)).
+package contents, which is a second guest-side image fetch this design deliberately
+avoids.
 
 ### Why released package YAML is frozen
 
@@ -132,40 +139,33 @@ so the encoding does not carry an mtime and a re-render is reproducible.
 and the name of the ACD decoded from the annotation all have to agree. `.github/workflows/test.yml`
 additionally fails if `make bundle` generated a file that is not committed.
 
-### The package-offerings annotation
+### The package-offerings annotation lists no versions
 
-The webhook rejects an `AddonRepository` without
-`addons.kubernetes.vmware.com/package-offerings`, on both fetch flavours — the check is on
-the kind, not on `spec.fetch`. But it is **declarative, not enforced**. Verified on a live
-Supervisor: a repository whose annotation named a single package version, pointed at a
-bundle carrying three, reconciled `Ready=True` with no error and materialised an
-`AddonRelease` and an `AddonConfigDefinition` for all three, including the versions the
-annotation omitted. A version-less declaration (`"versions": []`) behaves the same way and
-passes admission.
+Both `install/addonrepository.tpl.yml` and `supervisor-service/config/repo.yml` emit the
+annotation naming the package with `"versions": []`. It is required — the resource is
+rejected without it — but it is declarative: the manager materialises what the bundle
+contains and never checks it against the annotation. Since the annotation is frozen once
+installed, a version list written there could never be brought up to date as the catalog
+grows. Do not "fix" it by enumerating versions.
 
-That matters because the annotation is frozen once an `AddonRepositoryInstall` references
-it — the rejection fires on the update operation, so even re-applying an identical value
-is refused:
+### Releasing
 
-```
-annotations...package-offerings: AddonRepository is in use by an
-AddonRepositoryInstall, package-offerings annotation update is not allowed
-```
+Push a `v*` tag. `v1.1.0` sets `REPO_VERSION=1.1.0`, which names the snapshot tag and the
+Supervisor Service package version; it says nothing about package versions, which come
+from `PKG_VERSIONS`.
 
-A version list written there could therefore never be brought up to date as the catalog
-grows, and would be a permanent lie. So `install/addonrepository.tpl.yml` and
-`supervisor-service/config/repo.yml` both name the package and list no versions. The
-earlier reading of this annotation as an exact manifest came from the builtin repository
-happening to keep it accurate, not from any rejection.
+CI (`.github/workflows/build-release.yml`) runs `make release`, gating on `check`, then
+publishes the bundle to both tags, builds the Supervisor Service package, and attaches
+`dayzero-addonrepository.yml` and `dayzero-addon.yml` to a GitHub release. Moving
+`:stable` is the step that delivers: registered repositories follow it within about ten
+minutes, so the attached artifacts are unchanged from the previous release and nobody has
+to re-apply them.
 
-`make check` no longer compares it against the bundle — there is nothing to compare.
-Instead it asserts the bundle serves exactly `PKG_VERSIONS`, and that no package version
-or snapshot tag leaked into the install manifest, since anything release-specific there
-could never be applied over an existing registration.
+To ship a new package version: change `addon/`, append the version to `PKG_VERSIONS`, run
+`make bundle`, commit the new file under `released/`, and push a `v*` tag.
 
-CI (`.github/workflows/build-release.yml`) runs `make release` on a `v*` tag, which gates
-on `check` before publishing, and attaches the rendered install manifest to a GitHub
-release.
+`supervisor-service/config/values.yml` is generated from `values.yml.tpl`. Edit the
+template, not the generated file.
 
 ## Why `test/` exists
 
