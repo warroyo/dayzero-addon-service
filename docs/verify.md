@@ -29,8 +29,8 @@ of it is verified above; this runbook exists to close it.
 ```sh
 make bundle                     # assemble build/bundle, inspect it
 make test                       # render templates, validate, assert the round trip
-make check                      # offerings annotation vs bundle contents
-make push REPO_VERSION=1.1.0    # publish to the registry
+make check                      # bundle vs PKG_VERSIONS, manifest is release-independent
+make push REPO_VERSION=1.1.0    # publish: snapshot tag, then move :stable onto it
 ```
 
 `make bundle` stages the tree `kctrl package repository release` expects: every version in
@@ -59,10 +59,11 @@ make install-manifest
 kubectl apply -f build/install/addonrepository.yml
 ```
 
-The resources are named for the catalog version (`dayzero-addon-repo-1-1-0`), so this
-registers alongside any earlier catalog rather than replacing it. That is deliberate: an
-`AddonRepository` cannot be updated once installed. Delete the superseded pair after
-pins have moved.
+The resources carry no version (`dayzero-addon-repo-stable`) and point at the floating
+tag, so this is a one-time step: later catalogs arrive through the tag. Re-applying the
+same file is a no-op. An `AddonRepository` cannot be updated once installed, so if you
+need a *different* registration — a snapshot pin, say — give it its own name and its own
+`targetRepositoryName` rather than editing this one.
 
 ## Step 3: did the manager materialise the addon? (the gating question)
 
@@ -75,14 +76,22 @@ package version in the catalog. If they do not, read the repository install stat
 
 ```sh
 kubectl -n vmware-system-vks-public get addonrepositoryinstall \
-  dayzero-addon-repo-1-1-0-install -o jsonpath='{.status.usefulErrorMessage}'
+  dayzero-addon-repo-stable-install -o jsonpath='{.status.usefulErrorMessage}'
 ```
 
-A fetch error means the bundle is unreachable or the `imageURL` is wrong. A validation
-error names the field: the most likely is a `package-offerings` annotation that does not
-match the packages actually in the bundle. `make check` catches that before publishing.
-If the `AddonRelease` is present but rejected, check its status against the shape in
-`design.md`.
+A fetch error means the bundle is unreachable or the `imageURL` is wrong — for a private
+registry, that the Supervisor cannot pull it. The `package-offerings` annotation is not a
+suspect: it is declarative and never checked against the bundle. If the `AddonRelease` is
+present but rejected, check its status against the shape in `design.md`.
+
+After a release, confirm the moved tag landed rather than assuming it: the new
+`AddonRelease` appears without any CR changing, roughly ten minutes after the push.
+
+```sh
+kubectl -n vmware-system-vks-public get packagerepository dayzero-addon-repo-stable \
+  -o jsonpath='{.status.fetch.stdout}' | grep -o 'sha256:[a-f0-9]*'
+kubectl -n vmware-system-vks-public get addonrelease | grep dayzero
+```
 
 Confirm each ACD came through intact:
 
@@ -153,9 +162,10 @@ proves the tenant never needs a kubeconfig.
 
 | Symptom | Look at |
 |---|---|
-| Addon CRs never appear | `AddonRepositoryInstall.status.usefulErrorMessage`, step 3. Fetch error or `package-offerings` mismatch |
-| An edit to an AddonRepository is rejected as "in use by an AddonRepositoryInstall" | Expected. It is frozen once referenced; ship a new catalog release and delete the old pair. See the README |
-| Only some package versions materialised | `package-offerings` and the bundle disagree, or a version is listed in `PKG_VERSIONS` with no file in `released/`. Run `make check` |
+| Addon CRs never appear | `AddonRepositoryInstall.status.usefulErrorMessage`, step 3. Almost always a fetch error: unreachable bundle or a wrong `imageURL` |
+| An edit to an AddonRepository is rejected as "in use by an AddonRepositoryInstall" | Expected, and nothing here should be editing one. New package versions arrive by moving the tag, not by changing the CR. See the README |
+| A new package version never shows up | The tag did not move, or the manager has not re-resolved yet (allow ~10 min). Compare the digest in the `PackageRepository`'s `status.fetch.stdout` against what `:stable` points at |
+| Only some package versions materialised | A version is listed in `PKG_VERSIONS` with no file in `released/`, or the bundle was pushed before `make bundle` re-staged. Run `make check` |
 | ACD present but schema is `helmValues`/`helmOptions` | A helm AddonRepository was installed by mistake; this project ships an imgpkg one |
 | ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then the conditions |
 | values Secret is empty or malformed | The ACD output template. Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon` (capital V) |

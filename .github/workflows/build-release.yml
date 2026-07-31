@@ -28,7 +28,9 @@ jobs:
           curl -L https://carvel.dev/install.sh | sudo bash
           ytt version && imgpkg version && kbld version && kctrl version
 
-      # A `v*` tag names a catalog release, not a package version. The package versions
+      # A `v*` tag names a catalog publish, not a package version, and only sets the
+      # immutable snapshot tag. What reaches registered repositories is the floating
+      # `stable` tag, which `make push` re-points at the same bundle. The package versions
       # the catalog carries come from PKG_VERSIONS in the Makefile.
       - name: Set Version
         run: |
@@ -60,17 +62,24 @@ jobs:
             dayzero-addon.yml
           generate_release_notes: true
           body: |
-            Catalog `${{ env.REPO_VERSION }}`, published to
-            `ghcr.io/warroyo/dayzero-addon-repo:${{ env.REPO_VERSION }}`, carrying
-            `dayzero.kubernetes.vmware.com` at: ${{ env.PKG_VERSIONS }}.
+            Catalog `${{ env.REPO_VERSION }}`, carrying `dayzero.kubernetes.vmware.com`
+            at: ${{ env.PKG_VERSIONS }}. Published to
+            `ghcr.io/warroyo/dayzero-addon-repo:${{ env.REPO_VERSION }}` as an immutable
+            snapshot, and to `:stable`, which is the tag every registered repository
+            follows.
 
-            Two ways to install, both pointing at that bundle:
+            **Already installed? There is nothing to do.** Registered repositories
+            re-resolve `:stable` on their own, roughly every 10 minutes, and materialise
+            the package versions this catalog adds. The install artifacts below are
+            unchanged from previous releases and do not need re-applying — an
+            `AddonRepository` cannot be updated once in use, which is why nothing in them
+            varies per release.
+
+            First-time install, either way:
 
             - **Supervisor Service**: download `dayzero-addon.yml` and upload it through
               **Workload Management → Services → Add Service**.
             - **Direct apply**: `kubectl apply -f dayzero-addonrepository.yml`.
 
-            Both register an `AddonRepository` named
-            `dayzero-addon-repo-${{ env.REPO_VERSION }}`, with the dots replaced by
-            dashes. It does not replace an earlier catalog's pair, which stays registered
-            until you have moved your pins off it and deleted it.
+            Both register an `AddonRepository` named `dayzero-addon-repo-stable`, once and
+            for good.

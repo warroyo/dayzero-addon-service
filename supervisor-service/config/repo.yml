@@ -1,14 +1,19 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:json", "json")
 
-#@ versions = [v.strip() for v in data.values.addon_package_versions.split(",")]
-#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": versions}}}
+#! The versions are deliberately absent: the manager materialises whatever the bundle
+#! serves and never checks it against this annotation (verified), while the webhook
+#! forbids updating the annotation on an in-use AddonRepository. A version list here
+#! could never be brought up to date as the catalog grows.
+#@ offerings = {"repositoryVersion": "1.0.0", "packages": {data.values.addon_package: {"versions": []}}}
 
-#! An AddonRepository is frozen once an AddonRepositoryInstall references it, so both
-#! names carry the catalog version and a service upgrade replaces the pair rather than
-#! updating it (delete and create are allowed; update is not). targetRepositoryName names
-#! the backing Carvel PackageRepository, so two different catalogs must not share one.
-#@ name = "dayzero-addon-repo-" + data.values.repository_version.replace(".", "-").replace("+", "-")
+#! An AddonRepository is frozen once an AddonRepositoryInstall references it, and update
+#! is rejected while delete and create are allowed. So nothing here may vary per release:
+#! the names carry no version, the imageURL is the floating tag, and an upgrade of this
+#! service re-applies both resources unchanged, which kapp skips. New package versions
+#! reach clusters through the tag, not through a service upgrade. targetRepositoryName
+#! names the backing Carvel PackageRepository, so two catalogs must not share one.
+#@ name = data.values.repository_name
 
 #! No explicit namespace: the Supervisor Service deploy rewrites these into the service's
 #! own namespace, and the manager reconciles AddonRepository/AddonRepositoryInstall there
@@ -25,7 +30,8 @@ spec:
     imgpkgBundle:
       imageURL: #@ data.values.addon_repo_image
   targetRepositoryName: #@ name
-  version: #@ data.values.repository_version
+  #! A label on the registration, not on the catalog behind it. Constant, like the rest.
+  version: "1.0.0"
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall

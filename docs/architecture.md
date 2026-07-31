@@ -85,13 +85,18 @@ flowchart TB
 path that produces the three manager-owned kinds. The repository names a source; the
 install tells the manager to reconcile it. The repository must carry the
 `addons.kubernetes.vmware.com/package-offerings` annotation, a JSON listing of the
-packages and versions it offers, or the validating webhook rejects it. A repository is a
-catalog: the builtin `vks-addons:3.7.0-20260618` carries 22 packages, several at multiple
-versions, under a `repositoryVersion` (`3.7.0+20260618`) unrelated to any of them.
+packages and versions it offers, or the validating webhook rejects it — though the listing
+is declarative: the manager materialises what the bundle contains and never checks it
+against the annotation. A repository is a catalog: the builtin `vks-addons:3.7.0-20260618`
+carries 22 packages, several at multiple versions, under a `repositoryVersion`
+(`3.7.0+20260618`) unrelated to any of them.
 
 Once the install references it, the repository is frozen — only `spec.addonFilters` may
 change, and that is a `helmRepository` field, so an imgpkg repository cannot be edited at
-all. Superseding one means registering a second pair and deleting the first.
+all. Superseding one means registering a second pair and deleting the first. What *can*
+change underneath a registration is the image the tag resolves to: the backing Carvel
+`PackageRepository` holds the tag, re-resolves it on its own, and materialises whatever
+package versions the new bundle carries.
 
 **`Addon`**: one per addon, mostly metadata (`displayName`, `description`). It is the
 thing an `AddonInstall` references, and it groups the releases.

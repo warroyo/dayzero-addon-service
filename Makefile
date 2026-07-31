@@ -2,9 +2,15 @@ ADDON_NAME    := dayzero
 PKG_REF       := $(ADDON_NAME).kubernetes.vmware.com
 ADDON_REPO    := ghcr.io/warroyo/dayzero-addon-repo
 
-# The catalog release: the imgpkg tag, the AddonRepository's spec.version and
-# repositoryVersion, and the Supervisor Service package version. Not a package version.
-# A `v*` git tag sets it.
+# The tag the registered AddonRepository points at, and the only one it ever points at.
+# Every release re-points this tag at the newest bundle; the manager re-resolves it on its
+# own (~10 min, measured) and materialises whatever package versions it now finds. That is
+# what keeps a new package version from costing a new repo+install pair.
+CATALOG_TAG   := stable
+
+# An immutable snapshot tag for the same bundle, plus the Supervisor Service package
+# version. Nothing registered points here: it exists so a given publish can be identified,
+# re-fetched or pinned by hand later. Not a package version. A `v*` git tag sets it.
 REPO_VERSION  ?= 1.1.0
 
 # Every package version this catalog serves, oldest first. The catalog carries all of
@@ -20,19 +26,16 @@ PKG_DIR       := $(BUNDLE)/packages/$(PKG_REF)
 INSTALL_YML   := build/install/addonrepository.yml
 ACD_ANNO      := addons.kubernetes.vmware.com/addon-config-definition
 
-# A registered AddonRepository is frozen by the validating webhook, so each catalog
-# release is its own repo+install pair rather than an update of the last one. Object
-# names cannot carry a dot, hence the dashed suffix.
-REPO_NAME     := dayzero-addon-repo-$(subst .,-,$(subst +,-,$(REPO_VERSION)))
+# The registered pair is permanent, so its name carries no version. Everything in the CR
+# has to stay byte-stable as the catalog grows: the webhook rejects any update to an
+# in-use AddonRepository, so a rendered manifest that changed between releases could not
+# be re-applied. Hence the floating tag above and the version-less offerings annotation.
+REPO_NAME     := dayzero-addon-repo-$(CATALOG_TAG)
 
 # The Supervisor Service wrapper: the same two AddonRepository CRs, packaged for upload
 # through the vCenter Services catalogue.
 SVC_PKG       := dayzero-addon.fling.vsphere.vmware.com
 SVC_ARTIFACT  := dayzero-addon.yml
-
-comma         := ,
-space         := $(subst x,,x x)
-PKG_CSV       := $(subst $(space),$(comma),$(strip $(PKG_VERSIONS)))
 
 # Which version `make render` shows.
 RENDER_VERSION ?= $(lastword $(PKG_VERSIONS))
@@ -76,41 +79,51 @@ bundle: freeze
 	@for v in $(PKG_VERSIONS); do cp $(RELEASED)/$$v.yml $(PKG_DIR)/$$v.yml; done
 	@echo "catalog staged at $(BUNDLE): $(PKG_REF) $(PKG_VERSIONS)"
 
-# Render the admin-apply manifest. The package-offerings annotation is generated from
-# PKG_VERSIONS, never hand-maintained: the webhook requires it to be a complete, exact
-# manifest of the bundle, and it is frozen once installed.
+# Render the admin-apply manifest. It is deliberately identical from one release to the
+# next -- the floating tag, not the manifest, is what carries a new catalog to the
+# manager. An admin applies it once; re-applying it later is a no-op rather than the
+# update the webhook would reject.
 install-manifest:
 	@mkdir -p build/install
 	@ytt -f install/addonrepository.tpl.yml -f install/values.yml \
-		--data-value addon_repo_image=$(ADDON_REPO):$(REPO_VERSION) \
-		--data-value repository_version=$(REPO_VERSION) \
-		--data-value addon_package=$(PKG_REF) \
-		--data-value addon_package_versions=$(PKG_CSV) > $(INSTALL_YML)
-	@echo "install manifest at $(INSTALL_YML) ($(REPO_NAME))"
+		--data-value addon_repo_image=$(ADDON_REPO):$(CATALOG_TAG) \
+		--data-value repository_name=$(REPO_NAME) \
+		--data-value addon_package=$(PKG_REF) > $(INSTALL_YML)
+	@echo "install manifest at $(INSTALL_YML) ($(REPO_NAME) -> $(ADDON_REPO):$(CATALOG_TAG))"
 
-# Prove the offerings annotation and the bundle agree. Both come from PKG_VERSIONS, so
-# they cannot drift, but a mismatch is uncorrectable after install and worth a gate.
+# Two gates. The bundle must serve exactly PKG_VERSIONS, or a release silently ships or
+# drops a package version. And the install manifest must be free of package versions and
+# of the snapshot tag: anything release-specific in there would change between releases,
+# and the webhook rejects an update to an in-use AddonRepository, so an admin could never
+# apply the newer one over the older.
 check: bundle install-manifest
 	@want=$$(printf '%s\n' $(PKG_VERSIONS) | sort | tr '\n' ' '); \
 	built=$$(ls $(PKG_DIR) | sed -n 's/\.yml$$//p' | grep -v '^metadata$$' | sort | tr '\n' ' '); \
-	offered=$$(grep -o '"versions":\[[^]]*\]' $(INSTALL_YML) | grep -o '[0-9][^",]*' | sort | tr '\n' ' '); \
 	[ "$$built" = "$$want" ] || { echo "bundle serves [$$built], PKG_VERSIONS is [$$want]"; exit 1; }; \
-	[ "$$offered" = "$$want" ] || { echo "package-offerings lists [$$offered], bundle serves [$$want]"; exit 1; }; \
-	echo "package-offerings matches the bundle exactly: $$want"
+	grep -q '$(ADDON_REPO):$(CATALOG_TAG)' $(INSTALL_YML) || { echo "install manifest does not point at the floating tag $(CATALOG_TAG)"; exit 1; }; \
+	for v in $(PKG_VERSIONS) $(REPO_VERSION); do \
+		! grep -q "$$v" $(INSTALL_YML) || { echo "install manifest mentions $$v; it must be identical across releases"; exit 1; }; \
+	done; \
+	echo "bundle serves exactly [$$want]; install manifest is release-independent"
 
 # Publish the catalog, the kctrl way: kbld generates the ImagesLock, imgpkg pushes the
-# bundle. -t pins the tag to the catalog version instead of kctrl's build-<TIMESTAMP>
-# default, since that tag is what the AddonRepository's imageURL points at.
+# bundle. -t replaces kctrl's build-<TIMESTAMP> default tag. Twice, same content: the
+# snapshot tag identifies this publish, and moving CATALOG_TAG onto it is what actually
+# delivers the new package versions to every registered repository. The second push is
+# content-addressed, so it uploads nothing and only moves the tag.
 push: bundle
 	kctrl package repository release -y --chdir $(BUNDLE) -v $(REPO_VERSION) -t $(REPO_VERSION)
+	kctrl package repository release -y --chdir $(BUNDLE) -v $(REPO_VERSION) -t $(CATALOG_TAG)
+	@echo "$(ADDON_REPO):$(CATALOG_TAG) now serves $(PKG_VERSIONS); registered repositories pick it up within ~10 minutes"
 
 # Build the Supervisor Service package and assemble the single YAML uploaded through
-# Workload Management -> Services -> Add Service. kctrl pushes the wrapper bundle, so
-# this needs a registry login. The values schema is stamped first, so the service can
-# never point at a catalog other than the one being released.
+# Workload Management -> Services -> Add Service. kctrl pushes the wrapper bundle, so this
+# needs a registry login. The CRs it deploys are the release-independent ones, so a
+# service upgrade re-applies them unchanged, which kapp treats as a no-op -- an actual
+# change would be rejected, since the webhook forbids updating an in-use AddonRepository.
 supervisor-service:
-	@sed -e 's|@@REPO@@|$(ADDON_REPO)|g' -e 's|@@REPO_VERSION@@|$(REPO_VERSION)|g' \
-		-e 's|@@PKG_VERSIONS@@|$(PKG_CSV)|g' \
+	@sed -e 's|@@REPO@@|$(ADDON_REPO)|g' -e 's|@@CATALOG_TAG@@|$(CATALOG_TAG)|g' \
+		-e 's|@@REPO_NAME@@|$(REPO_NAME)|g' -e 's|@@PKG_REF@@|$(PKG_REF)|g' \
 		supervisor-service/values.yml.tpl > supervisor-service/config/values.yml
 	cd supervisor-service && kctrl package release -y -v $(REPO_VERSION) -t $(REPO_VERSION)
 	@cp supervisor-service/carvel-artifacts/packages/$(SVC_PKG)/metadata.yml ./$(SVC_ARTIFACT)

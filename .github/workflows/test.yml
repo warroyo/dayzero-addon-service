@@ -38,9 +38,10 @@ jobs:
             exit 1
           fi
 
-      # package-offerings must be an exact manifest of the bundle, and it is frozen once
-      # installed, so a mismatch has to fail before a tag is ever pushed.
-      - name: Offerings match the bundle
+      # The bundle must serve exactly PKG_VERSIONS, and the install manifest must stay
+      # release-independent: it is applied once and can never be updated in place, so
+      # anything release-specific leaking into it has to fail before a tag is pushed.
+      - name: Bundle and install manifest are consistent
         run: make check
 
       - name: Template tests

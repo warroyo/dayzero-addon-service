@@ -3,17 +3,18 @@
 #@data/values-schema
 ---
 
-#! The published catalog bundle the manager fetches.
-addon_repo_image: "ghcr.io/warroyo/dayzero-addon-repo:1.1.0"
+#! The catalog bundle the manager fetches. A floating tag on purpose: a release re-points
+#! it at the newest bundle, the manager re-resolves it on its own, and the registered
+#! AddonRepository never has to change. Point this at a snapshot tag instead (:1.1.0) to
+#! pin a repository to one catalog publish forever.
+addon_repo_image: "ghcr.io/warroyo/dayzero-addon-repo:stable"
 
-#! The catalog release. Becomes spec.version, the repositoryVersion in the offerings
-#! annotation, and the suffix on both object names. Not a package version.
-repository_version: "1.1.0"
+#! Both object names. Carries no version: the pair is registered once and kept.
+repository_name: "dayzero-addon-repo-stable"
 
-#! The packages the bundle serves. The offerings annotation has to match the bundle
-#! exactly, so this is generated from the Makefile's PKG_VERSIONS rather than typed.
+#! The package this catalog serves. Named in the offerings annotation; the versions are
+#! deliberately not listed there, see the template.
 addon_package: "dayzero.kubernetes.vmware.com"
-addon_package_versions: "1.0.1,1.0.2"
 
 #! Where the two CRs go. The manager reconciles them from here.
 namespace: "vmware-system-vks-public"

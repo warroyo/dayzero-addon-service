@@ -1,6 +1,6 @@
-#! Template for config/values.yml. `make supervisor-service` stamps the repo, the catalog
-#! version and the package list from the Makefile and writes the generated file into
-#! config/, which is what kctrl reads. Edit this file, not the generated one.
+#! Template for config/values.yml. `make supervisor-service` stamps the repo, the floating
+#! tag and both object names from the Makefile and writes the generated file into config/,
+#! which is what kctrl reads. Edit this file, not the generated one.
 #@data/values-schema
 ---
 
@@ -9,15 +9,17 @@
 #! rewrites their namespace), and the manager reconciles them from here.
 namespace: ""
 
-#! The published catalog bundle the manager fetches.
-addon_repo_image: "@@REPO@@:@@REPO_VERSION@@"
+#! The catalog bundle the manager fetches, on the floating tag. Nothing here changes when
+#! the catalog gains a package version -- the tag is re-pointed and the manager
+#! re-resolves it -- so a service instance keeps delivering new package versions without
+#! being upgraded.
+addon_repo_image: "@@REPO@@:@@CATALOG_TAG@@"
 
-#! The catalog release. Becomes spec.version, the repositoryVersion in the offerings
-#! annotation, and the suffix on both object names. Not a package version.
-repository_version: "@@REPO_VERSION@@"
+#! Both object names. Version-less: the pair is registered once and kept, and an upgrade
+#! of this service re-applies it unchanged (a no-op to kapp). Anything that varied per
+#! release would make an upgrade attempt an update the webhook rejects.
+repository_name: "@@REPO_NAME@@"
 
-#! The package versions the catalog serves, comma separated. The offerings annotation
-#! has to match the bundle exactly, so this is stamped from the Makefile's PKG_VERSIONS
-#! rather than typed. Overriding it without changing the bundle will fail the webhook.
-addon_package: "dayzero.kubernetes.vmware.com"
-addon_package_versions: "@@PKG_VERSIONS@@"
+#! The package this catalog serves. Named in the offerings annotation; the versions are
+#! deliberately not listed, see config/repo.yml.
+addon_package: "@@PKG_REF@@"

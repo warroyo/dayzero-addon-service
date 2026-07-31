@@ -63,11 +63,19 @@ There are two ways to install, and they end up in the same place: the same two C
 pointing at the same published catalog. Pick whichever matches how your Supervisor is
 administered. Each
 [release](https://github.com/warroyo/dayzero-addon-service/releases/latest) ships the
-artifact for both, already stamped with that release's catalog version and package list.
+artifact for both.
 
-A release is a **catalog release**, not a package release. `v1.1.0` publishes
-`dayzero-addon-repo:1.1.0`, which carries `dayzero.kubernetes.vmware.com` at every version
-released so far. The release notes list them.
+**You install once.** The registered `AddonRepository` points at
+`dayzero-addon-repo:stable`, a tag every release re-points at the newest catalog. The
+manager re-resolves that tag by itself — measured at about ten minutes — and materialises
+whatever package versions it now finds. A release that adds a package version therefore
+needs nothing from an admin: no new resources, no re-apply, no upgrade. The install
+artifacts are identical from one release to the next, which is deliberate (see [Why the
+registration never changes](#why-the-registration-never-changes)).
+
+Each release also publishes an immutable snapshot tag (`:1.1.0`) of the same bundle.
+Nothing points at it by default; it is there so a publish can be identified later, or
+pinned deliberately.
 
 ### Method 1: the Supervisor Service
 
@@ -81,12 +89,12 @@ gh release download --repo warroyo/dayzero-addon-service --pattern dayzero-addon
 
 Then upload it through **Workload Management → Services → Add Service** and create a
 service instance. The deploy places the two CRs in the service's own namespace, where the
-manager reconciles them. There is nothing to edit: the catalog image and its package list
-are already the package's values defaults.
+manager reconciles them. There is nothing to edit: the catalog image is already the
+package's values default.
 
-Do not override `addon_package_versions` from the service config form on its own. It
-generates the `package-offerings` annotation, which has to be an exact manifest of what
-the catalog actually serves, and the webhook rejects a mismatch.
+You do not need to upgrade the service instance to pick up a new package version — the
+catalog reaches it through the tag. Upgrading is safe when you want a newer wrapper: the
+CRs are identical across versions, so kapp re-applies them as a no-op.
 
 ### Method 2: apply the AddonRepository directly
 
@@ -100,8 +108,9 @@ kubectl apply -f dayzero-addonrepository.yml
 
 [`install/addonrepository.tpl.yml`](install/addonrepository.tpl.yml) is the ytt template it
 is rendered from. To point `imageURL` at a catalog you published yourself, run
-`make install-manifest ADDON_REPO=… REPO_VERSION=…` and apply `build/install/addonrepository.yml`.
-Do not hand-edit the `package-offerings` annotation.
+`make install-manifest ADDON_REPO=… CATALOG_TAG=…` and apply
+`build/install/addonrepository.yml`. Re-applying the same file later is a no-op; changing
+it after it is in use is rejected.
 
 ### Confirm it registered
 
@@ -112,31 +121,44 @@ kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep dayzero
 You should see one `AddonRelease` and one `AddonConfigDefinition` per package version in
 the catalog. Pin a cluster to one with `releaseFilter` on the `AddonInstall`.
 
-### Moving to a new catalog release
+### Why the registration never changes
 
 A registered `AddonRepository` is immutable. Once an `AddonRepositoryInstall` references
 it, the validating webhook allows only `spec.addonFilters` to change, which is a
 helm-repository field, so an imgpkg repository like this one cannot be edited at all —
-including `imageURL`. There is no way to repoint an existing registration at a new catalog.
+`imageURL` and the `package-offerings` annotation included. Not even a re-apply of the
+same value: the rejection is on the update operation, not on the change.
 
-So a new catalog release is a **new pair alongside the old one**, not an update:
+```
+The AddonRepository "dayzero-addon-repo" is invalid:
+  annotations...package-offerings: AddonRepository is in use by an
+  AddonRepositoryInstall, package-offerings annotation update is not allowed
+```
 
-1. Install the new release's `dayzero-addonrepository.yml`. It carries a distinct name and
-   a distinct `spec.targetRepositoryName` (`dayzero-addon-repo-1-1-0` for catalog `1.1.0`),
-   so it registers next to whatever is already there. `targetRepositoryName` names the
-   backing Carvel `PackageRepository`; two catalogs sharing one would collide, so only
-   mirrors of the same catalog should reuse a name.
-2. Move any `releaseFilter` pins onto versions the new catalog serves.
-3. Delete the superseded `AddonRepositoryInstall` and `AddonRepository`. Deletion is
-   allowed — update is the blocked operation.
+That is why the catalog moves and the registration does not. Two verified behaviours make
+it work:
 
-Within one catalog this does not apply. Every version it carries is already registered, so
-moving a pin between them needs no Supervisor access and no new resources, and the older
-versions stay available to roll back to.
+- **The manager re-resolves a moved tag.** The backing Carvel `PackageRepository` keeps
+  the tag, not the digest, and re-fetches on its own. A bundle pushed to an already
+  registered tag was picked up in 569s, materialising a new `AddonRelease` and
+  `AddonConfigDefinition` with no change to any CR.
+- **`package-offerings` is declarative, not enforced.** The manager materialises what the
+  bundle contains and never checks it against the annotation. A repository whose
+  annotation named one package version, pointed at a bundle carrying three, reconciled
+  `Ready` and materialised all three. So the annotation here names the package and lists
+  no versions — a list could never be corrected as the catalog grows.
 
-Upgrading the Supervisor Service instance does steps 1 and 3 for you: the new service
-version's CRs have new names, so the deploy creates the new pair and removes the old one
-rather than attempting a rejected update.
+Everything in the rendered manifest is therefore release-independent, and `make check`
+fails the build if a package version or the snapshot tag leaks into it.
+
+Rolling back is a pin, not a registration change: every version the catalog has ever
+carried is still registered, so a cluster moves between them with `releaseFilter` on its
+`AddonInstall`, needing no Supervisor access.
+
+The one case that still costs a new pair is deliberately pinning to a snapshot tag —
+`make install-manifest CATALOG_TAG=1.1.0` with a distinct `repository_name`. It registers
+alongside the rolling pair and never moves. `targetRepositoryName` names the backing
+Carvel `PackageRepository`, so a second registration needs its own.
 
 ## Usage
 
@@ -190,7 +212,7 @@ should be its own addon or Helm chart.
 make bundle              # stage the catalog for kctrl (build/bundle)
 make render              # inspect one Package and the ACD it carries
 make install-manifest    # render the admin-apply CRs (build/install/addonrepository.yml)
-make check               # assert package-offerings matches the bundle exactly
+make check               # assert the bundle serves PKG_VERSIONS and the manifest is release-independent
 make test                # render the ACD templates and the package ytt, validate against CRD schemas
 make push                # kctrl package repository release -> the registry
 make supervisor-service  # kctrl package release -> dayzero-addon.yml
@@ -204,12 +226,13 @@ Service artifact is a **package reference** — a `Package` and its `PackageMeta
 repository — so it runs `kctrl package release` over
 [`supervisor-service/`](supervisor-service/). Details in [`docs/plan.md`](docs/plan.md).
 
-Two versions drive the build, and they are independent:
+Three settings drive the build, and they are independent:
 
 | | |
 |---|---|
-| `REPO_VERSION` | The catalog release. The imgpkg tag, the `AddonRepository`'s `spec.version` and `repositoryVersion`, the suffix on both object names, and the Supervisor Service package version. Set by the `v*` git tag |
-| `PKG_VERSIONS` | Every package version the catalog serves. Lives in the `Makefile` and is the single source for both the bundle contents and the `package-offerings` annotation |
+| `CATALOG_TAG` | The tag the registered `AddonRepository` follows, and the only one it ever points at. Every release re-points it at the newest bundle; the manager re-resolves it on its own. Constant (`stable`) |
+| `PKG_VERSIONS` | Every package version the catalog serves. Lives in the `Makefile` and is the single source for the bundle contents |
+| `REPO_VERSION` | The immutable snapshot tag for one publish, and the Supervisor Service package version. Nothing registered points at it. Set by the `v*` git tag, and unrelated to any package version |
 
 Released package YAML is frozen under [`released/`](released/), one file per version, and
 copied into the bundle rather than re-rendered. Each `Package` carries its own
@@ -219,7 +242,9 @@ already pinned to it. `make bundle` only renders a version with no file there ye
 the result.
 
 To ship a new package version: change `addon/`, append the version to `PKG_VERSIONS`, run
-`make bundle`, commit the new file under `released/`, and tag a new `REPO_VERSION`.
+`make bundle`, commit the new file under `released/`, and push a `v*` tag. That is the
+whole loop — the new version reaches every registered repository through `:stable`, with
+no admin action anywhere.
 
 `make test` renders the AddonConfigDefinition's Go templates the way the addon controller
 does and the package's ytt the way the guest does, then checks that a payload encoded into
@@ -229,19 +254,20 @@ requires. See [`docs/plan.md`](docs/plan.md).
 
 ### Releasing
 
-Push a `v*` tag. The tag is the catalog release: `v1.1.0` sets `REPO_VERSION=1.1.0` and
-publishes `ghcr.io/warroyo/dayzero-addon-repo:1.1.0`. It says nothing about package
-versions — those come from `PKG_VERSIONS`, so a catalog release can add a package version,
-or ship the same set from a changed `install/` template.
+Push a `v*` tag. `v1.1.0` sets `REPO_VERSION=1.1.0`, which names the snapshot tag and the
+Supervisor Service package version. It says nothing about package versions — those come
+from `PKG_VERSIONS`.
 
-GitHub Actions runs `make release`, which checks the offerings against the bundle,
-publishes the catalog, and builds the Supervisor Service package, then attaches both
-`dayzero-addon.yml` and `dayzero-addonrepository.yml` to a GitHub release.
+GitHub Actions runs `make release`, which checks the bundle against `PKG_VERSIONS`,
+publishes it to both the snapshot tag and `:stable`, and builds the Supervisor Service
+package, then attaches both `dayzero-addon.yml` and `dayzero-addonrepository.yml` to a
+GitHub release. Moving `:stable` is the step that actually delivers: registered
+repositories follow it within about ten minutes, so a release needs no admin action and
+the attached artifacts are unchanged from the previous one.
 
 `supervisor-service/config/values.yml` is generated from
-[`values.yml.tpl`](supervisor-service/values.yml.tpl) with the catalog version and the
-package list stamped in, so the shipped service can only point at the catalog it was built
-with. Edit the template, not the generated file.
+[`values.yml.tpl`](supervisor-service/values.yml.tpl). Edit the template, not the
+generated file.
 
 ## Docs
 

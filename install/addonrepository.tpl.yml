@@ -1,24 +1,30 @@
 #! Install method 1: admin applies these two resources directly.
 #!
 #! This is a ytt template, not an appliable manifest. Render it with
-#! `make install-manifest`, which writes build/install/addonrepository.yml with the
-#! catalog version and package list stamped in. Releases attach the rendered file.
+#! `make install-manifest`, which writes build/install/addonrepository.yml. Releases attach
+#! the rendered file, and it is byte-identical from one release to the next by design.
 #!
 #! The addon manager reconciles the AddonRepository, fetches the catalog bundle, and
 #! materialises an Addon, an AddonRelease per package version, and the
 #! AddonConfigDefinitions in vmware-system-vks-public. Tenants then attach the addon per
 #! cluster (see examples/).
+#!
+#! Apply this once. A later catalog release does not reissue it: the tag it points at
+#! moves instead, and the manager re-resolves it (~10 min) and materialises the package
+#! versions the new bundle carries. Re-applying the same file is a harmless no-op, but
+#! applying a *changed* one is not possible -- see the annotation note below.
 #@ load("@ytt:data", "data")
 #@ load("@ytt:json", "json")
 
-#@ versions = [v.strip() for v in data.values.addon_package_versions.split(",")]
-#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": versions}}}
+#! The versions are deliberately absent. The manager materialises whatever the bundle
+#! serves and never checks the bundle against this annotation (verified: a repository
+#! whose annotation named one version, pointed at a bundle carrying three, reconciled
+#! Ready and materialised all three). Listing them would be worse than useless: the
+#! webhook rejects any update to an in-use AddonRepository, including this annotation, so
+#! a list written here could never be corrected as the catalog grows.
+#@ offerings = {"repositoryVersion": "1.0.0", "packages": {data.values.addon_package: {"versions": []}}}
 
-#! An AddonRepository is frozen once an AddonRepositoryInstall references it, so a catalog
-#! release is a new pair rather than an edit of the last one. The name and the
-#! targetRepositoryName both carry the catalog version: targetRepositoryName names the
-#! backing Carvel PackageRepository, and two different catalogs must not share one.
-#@ name = "dayzero-addon-repo-" + data.values.repository_version.replace(".", "-").replace("+", "-")
+#@ name = data.values.repository_name
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepository
@@ -26,15 +32,19 @@ metadata:
   name: #@ name
   namespace: #@ data.values.namespace
   annotations:
-    #! Required by addonrepositories.validating.vmware.com, and checked against the
-    #! bundle: every package the bundle serves, at every version, and nothing else.
+    #! Required by addonrepositories.validating.vmware.com: the resource is rejected
+    #! outright without it. Declarative only, and frozen after install.
     addons.kubernetes.vmware.com/package-offerings: #@ json.encode(offerings)
 spec:
   fetch:
     imgpkgBundle:
       imageURL: #@ data.values.addon_repo_image
+  #! Names the backing Carvel PackageRepository. Two different catalogs must not share
+  #! one, so it tracks the repository name.
   targetRepositoryName: #@ name
-  version: #@ data.values.repository_version
+  #! A label on the registration, not on the catalog behind it: the tag moves, so the
+  #! content changes while this stays put. Kept constant for that reason.
+  version: "1.0.0"
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall

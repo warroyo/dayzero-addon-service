@@ -138,18 +138,27 @@ see [Alternatives rejected](#alternatives-rejected).
   rejects the resources without the name label. The CRD schemas do not cover this, so
   `make test` pins it.
 - An `AddonRepository` must carry the `addons.kubernetes.vmware.com/package-offerings`
-  annotation (a JSON listing of the packages it offers), or the webhook rejects it. It is
-  read as an exact manifest of the bundle, so it is generated from the version list rather
-  than hand-maintained.
+  annotation (a JSON listing of the packages it offers), on either fetch flavour, or the
+  webhook rejects it. It is declarative only: the manager materialises whatever the bundle
+  contains and never checks it against the annotation. Verified — a repository whose
+  annotation named one package version, pointed at a bundle carrying three, reconciled
+  `Ready=True` and materialised all three.
 - An `AddonRepository` is frozen once an `AddonRepositoryInstall` references it.
   `addonrepositories.validating.vmware.com` permits only `spec.addonFilters` to change, and
   that is a `helmRepository` field, so an imgpkg repository is immutable outright. Verified:
   a server-side dry run changing only `spec.fetch.imgpkgBundle.imageURL` was rejected with
-  `AddonRepository is in use by an AddonRepositoryInstall`. Deletion is still allowed. A new
-  catalog release therefore gets its own name and its own `targetRepositoryName` (which
-  names the backing Carvel `PackageRepository`, so two catalogs must not share one) and the
-  superseded pair is deleted once pins have moved. The shipped repositories work the same
-  way: `standard-packages` 3.6 stays registered next to `vks-addons-3.7.0`.
+  `AddonRepository is in use by an AddonRepositoryInstall`, and so was a patch re-applying
+  the *existing* value of the offerings annotation — the rejection is on the update
+  operation, not on the change. `kubectl apply` of an unchanged manifest is a no-op and
+  never reaches admission, so re-applying is safe. Deletion is still allowed.
+- The manager re-resolves a moved tag on its own. The backing Carvel `PackageRepository`
+  holds the tag rather than the digest and re-fetches periodically; a bundle pushed to an
+  already registered tag was picked up 569s later, materialising a new `AddonRelease` and
+  `AddonConfigDefinition` with no CR change. This is what lets one permanent registration
+  serve a growing catalog, and it is the design this repo uses.
+- `spec.targetRepositoryName` names the backing Carvel `PackageRepository`, so two
+  registrations must not share one. A pinned registration alongside the rolling one needs
+  its own name and its own `targetRepositoryName`.
 - `AddonConfig` must be named `<cluster-name>-<addon-name>` and created in the cluster's
   Supervisor namespace, with the `owned-for-deletion` annotation so it is garbage
   collected with the `ClusterAddon`.

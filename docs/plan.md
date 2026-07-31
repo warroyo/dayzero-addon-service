@@ -33,24 +33,36 @@ dayzero-addon-service/
 └── docs/
 ```
 
-## Two versions
+## One moving tag, three settings
 
 `addon/` is the source for a *single* package version. The bundle is a catalog of many, so
-the build keeps two versions apart:
+the build keeps three things apart:
 
 | | |
 |---|---|
-| `REPO_VERSION` | The catalog release: the imgpkg tag, the `AddonRepository`'s `spec.version` and `repositoryVersion`, the suffix on both object names, and the Supervisor Service package version. A `v*` git tag sets it, and it is unrelated to any package version |
-| `PKG_VERSIONS` | Every package version the catalog serves. The single source for both the bundle contents and the `package-offerings` annotation |
+| `CATALOG_TAG` | The tag the registered `AddonRepository` points at, and the only one it ever points at. Constant (`stable`); every release re-points it at the newest bundle |
+| `PKG_VERSIONS` | Every package version the catalog serves. The single source for the bundle contents |
+| `REPO_VERSION` | The immutable snapshot tag for one publish, plus the Supervisor Service package version. Nothing registered points at it. A `v*` git tag sets it, and it is unrelated to any package version |
 
-Shipping every version in one catalog is what makes a version bump cheap for consumers. A
-registered `AddonRepository` is frozen by the validating webhook — only `spec.addonFilters`
-is mutable, and that is a helm-repository field, so an imgpkg repository cannot be edited
-at all, `imageURL` included. A consumer moving a `releaseFilter` pin between two versions
-of the same catalog touches nothing on the Supervisor, because both `AddonRelease`s already
-exist. Moving to a *new catalog* still costs a new repo+install pair, which is what VMware
-does too (`standard-packages` 3.6 stays registered next to `vks-addons` 3.7). The win is
-that it happens per catalog release rather than per package version.
+A registered `AddonRepository` is frozen by the validating webhook — only
+`spec.addonFilters` is mutable, and that is a helm-repository field, so an imgpkg
+repository cannot be edited at all, `imageURL` and the `package-offerings` annotation
+included, and not even a re-apply of an identical value is allowed. The design routes
+around that rather than paying it per release: the registration is permanent, the tag
+underneath it moves, and the manager re-resolves the tag by itself (measured at 569s). A
+release therefore costs an admin nothing.
+
+Shipping every version in one catalog is what makes a version bump cheap for consumers on
+top of that. A consumer moving a `releaseFilter` pin between two versions touches nothing
+on the Supervisor, because both `AddonRelease`s already exist.
+
+The remaining cost is that the tag is mutable, so the *registration* no longer identifies
+what it serves. Two things keep that honest: `released/` freezes each package version's
+YAML so the catalog is append-only — a version already published never changes meaning —
+and each publish also gets an immutable snapshot tag, so a deliberate pin is always
+available. VMware's own repositories take the other route (`standard-packages` 3.6 stays
+registered next to `vks-addons` 3.7), which is the right call for a catalog that ships
+with the platform and the wrong one for a catalog that adds a package version a week.
 
 ## Two template languages, kept apart
 
@@ -70,11 +82,11 @@ that it happens per catalog release rather than per package version.
 |---|---|
 | `freeze` | Renders any version in `PKG_VERSIONS` that has no file in `released/` yet, and only those |
 | `bundle` | Stages `build/bundle` for kctrl: every frozen version and the `PackageMetadata` under `packages/<refName>/`, plus a stamped `pkgrepo-build.yml` |
-| `install-manifest` | Renders `install/addonrepository.tpl.yml`, generating `package-offerings` from `PKG_VERSIONS` |
-| `check` | Asserts the offerings annotation and the bundle contents are the same set |
+| `install-manifest` | Renders `install/addonrepository.tpl.yml`. Deliberately identical from release to release |
+| `check` | Asserts the bundle serves exactly `PKG_VERSIONS`, and that no package version or snapshot tag leaked into the install manifest |
 | `render` | Shows one Package and the ACD decoded from its annotation |
 | `test`   | `go vet` and `go test` in `test/` |
-| `push`   | `kctrl package repository release`, tagged `$(REPO_VERSION)` |
+| `push`   | `kctrl package repository release` twice over the same bundle: once tagged `$(REPO_VERSION)`, once tagged `$(CATALOG_TAG)`. The second is content-addressed, so it only moves the tag |
 
 The ACD travels in the Package's `addon-config-definition` annotation as gzip+base64,
 which is how the shipped cilium addon delivers its definition. `freeze` does the encoding,
@@ -123,12 +135,33 @@ additionally fails if `make bundle` generated a file that is not committed.
 ### The package-offerings annotation
 
 The webhook rejects an `AddonRepository` without
-`addons.kubernetes.vmware.com/package-offerings`, and treats it as a complete, exact
-manifest — the builtin `vks-addons` repository lists all 22 of its packages with no version
-mismatches. It is also frozen once installed, so a wrong one cannot be corrected in place;
-it has to be a new repo+install pair. It is therefore generated from `PKG_VERSIONS` in both
-`install/addonrepository.tpl.yml` and `supervisor-service/config/repo.yml`, never
-hand-maintained, and `make check` compares it against the assembled bundle.
+`addons.kubernetes.vmware.com/package-offerings`, on both fetch flavours — the check is on
+the kind, not on `spec.fetch`. But it is **declarative, not enforced**. Verified on a live
+Supervisor: a repository whose annotation named a single package version, pointed at a
+bundle carrying three, reconciled `Ready=True` with no error and materialised an
+`AddonRelease` and an `AddonConfigDefinition` for all three, including the versions the
+annotation omitted. A version-less declaration (`"versions": []`) behaves the same way and
+passes admission.
+
+That matters because the annotation is frozen once an `AddonRepositoryInstall` references
+it — the rejection fires on the update operation, so even re-applying an identical value
+is refused:
+
+```
+annotations...package-offerings: AddonRepository is in use by an
+AddonRepositoryInstall, package-offerings annotation update is not allowed
+```
+
+A version list written there could therefore never be brought up to date as the catalog
+grows, and would be a permanent lie. So `install/addonrepository.tpl.yml` and
+`supervisor-service/config/repo.yml` both name the package and list no versions. The
+earlier reading of this annotation as an exact manifest came from the builtin repository
+happening to keep it accurate, not from any rejection.
+
+`make check` no longer compares it against the bundle — there is nothing to compare.
+Instead it asserts the bundle serves exactly `PKG_VERSIONS`, and that no package version
+or snapshot tag leaked into the install manifest, since anything release-specific there
+could never be applied over an existing registration.
 
 CI (`.github/workflows/build-release.yml`) runs `make release` on a `v*` tag, which gates
 on `check` before publishing, and attaches the rendered install manifest to a GitHub
