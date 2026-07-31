@@ -1,0 +1,41 @@
+apiVersion: data.packaging.carvel.dev/v1alpha1
+kind: Package
+metadata:
+  name: dayzero.kubernetes.vmware.com.1.0.2
+  annotations:
+    addon.kubernetes.vmware.com/addon-name: dayzero
+    addons.kubernetes.vmware.com/addon-config-definition: H4sIAAAAAAAAA+1VS28bNxC++1cMDAe+hNu4vS2QgxEHhdsmMZLCQND0MOKOJFZckiW566qK/nuH3Id2LSVB0aCXVqflvL9vHkKn7skHZU0JWFXWhGLTLMgbihSKtn5AT4W09TftFWq3xquzjTJVCdfJ9oU1S7W6oaUyKnKIs5oiVhixPAMwWFMJFW7/JG9PBy2uimfFt71tcCjZodOKsA2RatFugnDNQivJVhoXpEOKDV2tnyg168Qs/9/w+VIdwZFMNWSPWxMian1HvlYhs9hlkpJCuLNsr6ivWID1FfkSnuUngG/0oEtadOp7bxs3ipLw/Hx8eAq28ZJmepk7UKMLo7Alv5jZrChOXlqF6fMBo1z/sxoCSU/xaxSQEXnCSBNB46q5wD3yqEhTNghyTTV2ma0jc313e//du4kQIG4d99YufiM5FOE82/qopqBO4Bx80XvcTqQVBemVi3mDfhxn6xAComVend6CMvwZ1wRSNzxV/ilggBB9I2PjqYL3169+KuAlyjUoHjpQAaxha1u7hHAMWczSL7HRsYRffp1Ik/us9pPIu98f4rARwnEO8i2JxmyMfTBiqUhXoQSuko7peY+1PqaIISmz+oocIQQOqJkBfICa4SpRWdnUZGImrc94kpc8vUyH0zxFt8Y18e20uYIzsuz19Fh0Z+0Vum6XJxeyvcqi7gTOzbpzc7nbFS+6yosk2e9FH/QyWwVpE0OvhzuThbzEDAAZ+uFU8EhitHwtbKYN9QTFmyYewwgNu7QqWD8G7+yG/pzAMSB5lze4F30JiEgHXrSoGwqXwymjJXkykn7OA3CflW9pmdVD2SV87M13OwEX3Ms0PlA+h6JzKGZzBR+HJnIPQez3E2e1hOKGeMUrTsqbC/v9KXHxuKG9nUezIrjYPIWLNuf/rFORAMMs/1j8cz4f3LclnD8JH4wQ4oN5Es4Peo4/c+QsfQ2Pv3qjbpJv+v/Q7tdxXWzTso0czvbwh5C6utsdMzlhMR1efkabrA8fY+rjzU4RRyjHDt22v3H4e74NAiJ6vvX92Px70/fJf+24Wf0/gf+ZCfwLnOFpM8sKAAA=
+spec:
+  refName: dayzero.kubernetes.vmware.com
+  version: 1.0.2
+  kubernetesVersionSelection:
+    constraints: '>=1.33.0'
+  template:
+    spec:
+      fetch:
+      - inline:
+          paths:
+            values-schema.yml: |
+              #@data/values
+              ---
+              resourcesJson: "[]"
+              resourcesYaml: ""
+            render.yml: |
+              #@ load("@ytt:data", "data")
+              #@ load("@ytt:json", "json")
+              #@ load("@ytt:yaml", "yaml")
+              #@ for r in json.decode(data.values.resourcesJson):
+              --- #@ r
+              #@ end
+              #@ for doc in data.values.resourcesYaml.split("\n---\n"):
+              #@ if doc.strip() != "":
+              --- #@ yaml.decode(doc)
+              #@ end
+              #@ end
+      template:
+      - ytt:
+          paths:
+          - values-schema.yml
+          - render.yml
+      deploy:
+      - kapp: {}

@@ -1,0 +1,47 @@
+#! Install method 1: admin applies these two resources directly.
+#!
+#! This is a ytt template, not an appliable manifest. Render it with
+#! `make install-manifest`, which writes build/install/addonrepository.yml with the
+#! catalog version and package list stamped in. Releases attach the rendered file.
+#!
+#! The addon manager reconciles the AddonRepository, fetches the catalog bundle, and
+#! materialises an Addon, an AddonRelease per package version, and the
+#! AddonConfigDefinitions in vmware-system-vks-public. Tenants then attach the addon per
+#! cluster (see examples/).
+#@ load("@ytt:data", "data")
+#@ load("@ytt:json", "json")
+
+#@ versions = [v.strip() for v in data.values.addon_package_versions.split(",")]
+#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": versions}}}
+
+#! An AddonRepository is frozen once an AddonRepositoryInstall references it, so a catalog
+#! release is a new pair rather than an edit of the last one. The name and the
+#! targetRepositoryName both carry the catalog version: targetRepositoryName names the
+#! backing Carvel PackageRepository, and two different catalogs must not share one.
+#@ name = "dayzero-addon-repo-" + data.values.repository_version.replace(".", "-").replace("+", "-")
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepository
+metadata:
+  name: #@ name
+  namespace: #@ data.values.namespace
+  annotations:
+    #! Required by addonrepositories.validating.vmware.com, and checked against the
+    #! bundle: every package the bundle serves, at every version, and nothing else.
+    addons.kubernetes.vmware.com/package-offerings: #@ json.encode(offerings)
+spec:
+  fetch:
+    imgpkgBundle:
+      imageURL: #@ data.values.addon_repo_image
+  targetRepositoryName: #@ name
+  version: #@ data.values.repository_version
+---
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonRepositoryInstall
+metadata:
+  name: #@ name + "-install"
+  namespace: #@ data.values.namespace
+spec:
+  addonRepositoryRef:
+    name: #@ name
+    namespace: #@ data.values.namespace

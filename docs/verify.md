@@ -24,25 +24,45 @@ an inline-content package to the guest. This cannot be tested without a bundle t
 Supervisor can pull, because that is what an `AddonRepository` fetches. Everything downstream
 of it is verified above; this runbook exists to close it.
 
-## Step 1: build and publish the bundle
+## Step 1: build and publish the catalog
 
 ```sh
-make bundle                 # assemble build/bundle, inspect it
-make test                   # render templates, validate, assert the round trip
-make push VERSION=1.0.0     # publish to the registry
+make bundle                     # assemble build/bundle, inspect it
+make test                       # render templates, validate, assert the round trip
+make check                      # offerings annotation vs bundle contents
+make push REPO_VERSION=1.1.0    # publish to the registry
 ```
 
-Confirm the bundle is a package repository: `build/bundle/packages/<pkg>/{metadata.yml,1.0.0.yml}`
-plus a `.imgpkg/images.yml` with an empty `images` list (no container images to mirror).
-Confirm the Package's `addon-config-definition` annotation decodes back to the ACD.
+`make bundle` stages the tree `kctrl package repository release` expects: every version in
+`PKG_VERSIONS` under `build/bundle/packages/<pkg>/`, plus `metadata.yml` and the stamped
+`pkgrepo-build.yml`. Confirm each Package's `addon-config-definition` annotation decodes
+back to an ACD named for that version — `make render RENDER_VERSION=<v>` does both.
+
+`make push` hands that to kctrl, which runs kbld to generate `.imgpkg/images.yml` and
+pushes. Pull it back to confirm what actually landed in the registry:
+
+```sh
+imgpkg pull -b ghcr.io/warroyo/dayzero-addon-repo:1.1.0 -o /tmp/check && find /tmp/check -type f
+```
+
+Expect `packages/<pkg>/` with `metadata.yml` and one file per version, and an
+`.imgpkg/images.yml` listing no images — the packages fetch inline, so there are no
+container images to mirror for air-gap. The staging-only `pkgrepo-build.yml` should not be
+in there.
 
 ## Step 2: install the AddonRepository
 
-Either method from the README. Point `imageURL` at the bundle from step 1.
+Either method from the README. Point `imageURL` at the catalog from step 1.
 
 ```sh
-kubectl apply -f install/addonrepository.yml
+make install-manifest
+kubectl apply -f build/install/addonrepository.yml
 ```
+
+The resources are named for the catalog version (`dayzero-addon-repo-1-1-0`), so this
+registers alongside any earlier catalog rather than replacing it. That is deliberate: an
+`AddonRepository` cannot be updated once installed. Delete the superseded pair after
+pins have moved.
 
 ## Step 3: did the manager materialise the addon? (the gating question)
 
@@ -50,26 +70,30 @@ kubectl apply -f install/addonrepository.yml
 kubectl -n vmware-system-vks-public get addon,addonrelease,acd | grep dayzero
 ```
 
-All three should appear. If they do not, read the repository install status:
+All three kinds should appear, with one `AddonRelease` and one `AddonConfigDefinition` per
+package version in the catalog. If they do not, read the repository install status:
 
 ```sh
 kubectl -n vmware-system-vks-public get addonrepositoryinstall \
-  dayzero-addon-repo-install -o jsonpath='{.status.usefulErrorMessage}'
+  dayzero-addon-repo-1-1-0-install -o jsonpath='{.status.usefulErrorMessage}'
 ```
 
 A fetch error means the bundle is unreachable or the `imageURL` is wrong. A validation
 error names the field: the most likely is a `package-offerings` annotation that does not
-match the packages actually in the bundle. If the `AddonRelease` is present but rejected,
-check its status against the shape in `design.md`.
+match the packages actually in the bundle. `make check` catches that before publishing.
+If the `AddonRelease` is present but rejected, check its status against the shape in
+`design.md`.
 
-Confirm the ACD came through intact:
+Confirm each ACD came through intact:
 
 ```sh
-kubectl -n vmware-system-vks-public get acd dayzero.kubernetes.vmware.com.1.0.0 \
+kubectl -n vmware-system-vks-public get acd dayzero.kubernetes.vmware.com.1.0.2 \
   -o jsonpath='{.spec.schema.openAPIV3Schema.properties}'
 ```
 
-It should show `resources` and `resourcesYaml`, our schema, not a generated one.
+It should show `resources` and `resourcesYaml`, our schema, not a generated one. Repeat for
+each version: they are separate definitions, and a frozen older version should still carry
+the schema it was published with.
 
 ## Step 4: attach it to a cluster
 
@@ -130,6 +154,8 @@ proves the tenant never needs a kubeconfig.
 | Symptom | Look at |
 |---|---|
 | Addon CRs never appear | `AddonRepositoryInstall.status.usefulErrorMessage`, step 3. Fetch error or `package-offerings` mismatch |
+| An edit to an AddonRepository is rejected as "in use by an AddonRepositoryInstall" | Expected. It is frozen once referenced; ship a new catalog release and delete the old pair. See the README |
+| Only some package versions materialised | `package-offerings` and the bundle disagree, or a version is listed in `PKG_VERSIONS` with no file in `released/`. Run `make check` |
 | ACD present but schema is `helmValues`/`helmOptions` | A helm AddonRepository was installed by mistake; this project ships an imgpkg one |
 | ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then the conditions |
 | values Secret is empty or malformed | The ACD output template. Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon` (capital V) |

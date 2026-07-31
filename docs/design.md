@@ -42,16 +42,23 @@ depot) that the Supervisor feeds. This is the VKS isolation model.
 
 ## What ships: a package repository with the ACD in an annotation
 
-The addon-repository bundle (`make bundle`) is a Carvel package repository containing one
-`Package` and its `PackageMetadata`. The `Package` carries our hand-written
+The bundle (`make bundle`) is a Carvel package repository: a `PackageMetadata` and one
+`Package` per released version. Each `Package` carries our hand-written
 `AddonConfigDefinition` in its `addons.kubernetes.vmware.com/addon-config-definition`
 annotation as gzip+base64. This is exactly how the shipped cilium addon delivers its
 definition, and it is why our own ACD (schema, validation, output resources) survives the
-`AddonRepository` route intact. `make bundle` renders the ACD and encodes it into the
+`AddonRepository` route intact. `make freeze` renders the ACD and encodes it into the
 annotation, so the ACD is edited as a readable file.
 
-The `Package` also declares `kubernetesVersionSelection.constraints`, which lands on the
+Each `Package` also declares `kubernetesVersionSelection.constraints`, which lands on its
 generated `AddonRelease`.
+
+It is a catalog, not a shipping container for the newest version, because an
+`AddonRepository` is immutable once installed (see below). Carrying every released version
+at once means the manager materialises an `AddonRelease` for each, so a consumer changing
+which version a cluster runs only moves a `releaseFilter` pin — no Supervisor-admin access,
+no new resources, and older versions stay available to roll back to. The mechanics are in
+[`plan.md`](./plan.md); the frozen-YAML rule that keeps old versions honest is there too.
 
 ## How the payload reaches the guest
 
@@ -131,7 +138,18 @@ see [Alternatives rejected](#alternatives-rejected).
   rejects the resources without the name label. The CRD schemas do not cover this, so
   `make test` pins it.
 - An `AddonRepository` must carry the `addons.kubernetes.vmware.com/package-offerings`
-  annotation (a JSON listing of the packages it offers), or the webhook rejects it.
+  annotation (a JSON listing of the packages it offers), or the webhook rejects it. It is
+  read as an exact manifest of the bundle, so it is generated from the version list rather
+  than hand-maintained.
+- An `AddonRepository` is frozen once an `AddonRepositoryInstall` references it.
+  `addonrepositories.validating.vmware.com` permits only `spec.addonFilters` to change, and
+  that is a `helmRepository` field, so an imgpkg repository is immutable outright. Verified:
+  a server-side dry run changing only `spec.fetch.imgpkgBundle.imageURL` was rejected with
+  `AddonRepository is in use by an AddonRepositoryInstall`. Deletion is still allowed. A new
+  catalog release therefore gets its own name and its own `targetRepositoryName` (which
+  names the backing Carvel `PackageRepository`, so two catalogs must not share one) and the
+  superseded pair is deleted once pins have moved. The shipped repositories work the same
+  way: `standard-packages` 3.6 stays registered next to `vks-addons-3.7.0`.
 - `AddonConfig` must be named `<cluster-name>-<addon-name>` and created in the cluster's
   Supervisor namespace, with the `owned-for-deletion` annotation so it is garbage
   collected with the `ClusterAddon`.

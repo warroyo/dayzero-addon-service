@@ -1,7 +1,14 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:json", "json")
 
-#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": [data.values.addon_package_version]}}}
+#@ versions = [v.strip() for v in data.values.addon_package_versions.split(",")]
+#@ offerings = {"repositoryVersion": data.values.repository_version, "packages": {data.values.addon_package: {"versions": versions}}}
+
+#! An AddonRepository is frozen once an AddonRepositoryInstall references it, so both
+#! names carry the catalog version and a service upgrade replaces the pair rather than
+#! updating it (delete and create are allowed; update is not). targetRepositoryName names
+#! the backing Carvel PackageRepository, so two different catalogs must not share one.
+#@ name = "dayzero-addon-repo-" + data.values.repository_version.replace(".", "-").replace("+", "-")
 
 #! No explicit namespace: the Supervisor Service deploy rewrites these into the service's
 #! own namespace, and the manager reconciles AddonRepository/AddonRepositoryInstall there
@@ -10,21 +17,21 @@
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepository
 metadata:
-  name: dayzero-addon-repo
+  name: #@ name
   annotations:
     addons.kubernetes.vmware.com/package-offerings: #@ json.encode(offerings)
 spec:
   fetch:
     imgpkgBundle:
       imageURL: #@ data.values.addon_repo_image
-  targetRepositoryName: dayzero-addon-repo
+  targetRepositoryName: #@ name
   version: #@ data.values.repository_version
 ---
 apiVersion: addons.kubernetes.vmware.com/v1alpha1
 kind: AddonRepositoryInstall
 metadata:
-  name: dayzero-addon-repo-install
+  name: #@ name + "-install"
 spec:
   addonRepositoryRef:
-    name: dayzero-addon-repo
+    name: #@ name
     namespace: #@ data.values.namespace

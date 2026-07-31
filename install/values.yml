@@ -1,0 +1,19 @@
+#! Data values for addonrepository.tpl.yml. `make install-manifest` supplies all of them
+#! from the Makefile, so the defaults here only matter when rendering the template by hand.
+#@data/values-schema
+---
+
+#! The published catalog bundle the manager fetches.
+addon_repo_image: "ghcr.io/warroyo/dayzero-addon-repo:1.1.0"
+
+#! The catalog release. Becomes spec.version, the repositoryVersion in the offerings
+#! annotation, and the suffix on both object names. Not a package version.
+repository_version: "1.1.0"
+
+#! The packages the bundle serves. The offerings annotation has to match the bundle
+#! exactly, so this is generated from the Makefile's PKG_VERSIONS rather than typed.
+addon_package: "dayzero.kubernetes.vmware.com"
+addon_package_versions: "1.0.1,1.0.2"
+
+#! Where the two CRs go. The manager reconciles them from here.
+namespace: "vmware-system-vks-public"

@@ -21,29 +21,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # kbld is load-bearing: `kctrl package repository release` shells out to it to
+      # generate the bundle's .imgpkg/images.yml.
       - name: Install Carvel Tools
         run: |
           curl -L https://carvel.dev/install.sh | sudo bash
-          ytt version && imgpkg version && kctrl version
+          ytt version && imgpkg version && kbld version && kctrl version
 
+      # A `v*` tag names a catalog release, not a package version. The package versions
+      # the catalog carries come from PKG_VERSIONS in the Makefile.
       - name: Set Version
         run: |
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             TAG=${GITHUB_REF#refs/tags/}
-            echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+            echo "REPO_VERSION=${TAG#v}" >> $GITHUB_ENV
           else
-            echo "VERSION=latest" >> $GITHUB_ENV
+            echo "REPO_VERSION=latest" >> $GITHUB_ENV
           fi
+          echo "PKG_VERSIONS=$(make -s pkg-versions)" >> $GITHUB_ENV
 
-      # Publishes the addon-repository bundle and builds the Supervisor Service package
-      # (kctrl pushes the wrapper bundle to ghcr, hence the login above).
+      # Publishes the catalog bundle and builds the Supervisor Service package (kctrl
+      # pushes the wrapper bundle to ghcr, hence the login above). `release` gates on
+      # `check`, which fails the build if package-offerings and the bundle disagree.
       - name: Build and publish both packages
         if: startsWith(github.ref, 'refs/tags/v')
-        run: make release VERSION=${{ env.VERSION }}
+        run: make release REPO_VERSION=${{ env.REPO_VERSION }}
 
       - name: Assemble install manifest for the release
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cp install/addonrepository.yml dayzero-addonrepository.yml
+        run: cp build/install/addonrepository.yml dayzero-addonrepository.yml
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -54,11 +60,17 @@ jobs:
             dayzero-addon.yml
           generate_release_notes: true
           body: |
-            The addon-repository bundle for this release is published to
-            `ghcr.io/warroyo/dayzero-addon-repo:${{ env.VERSION }}`.
+            Catalog `${{ env.REPO_VERSION }}`, published to
+            `ghcr.io/warroyo/dayzero-addon-repo:${{ env.REPO_VERSION }}`, carrying
+            `dayzero.kubernetes.vmware.com` at: ${{ env.PKG_VERSIONS }}.
 
             Two ways to install, both pointing at that bundle:
 
             - **Supervisor Service**: download `dayzero-addon.yml` and upload it through
               **Workload Management → Services → Add Service**.
             - **Direct apply**: `kubectl apply -f dayzero-addonrepository.yml`.
+
+            Both register an `AddonRepository` named
+            `dayzero-addon-repo-${{ env.REPO_VERSION }}`, with the dots replaced by
+            dashes. It does not replace an earlier catalog's pair, which stays registered
+            until you have moved your pins off it and deleted it.

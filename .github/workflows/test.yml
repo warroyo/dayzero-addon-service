@@ -27,5 +27,21 @@ jobs:
       - name: Render config
         run: make render
 
+      # `make bundle` freezes any listed package version that has no committed file yet.
+      # If that happened here, the release would ship a version whose rendering is not in
+      # the repo, and the next build would re-render it from whatever addon/ says then.
+      - name: Every listed package version is committed
+        run: |
+          if [[ -n "$(git status --porcelain released/)" ]]; then
+            echo "make bundle generated package YAML that is not committed:"
+            git status --porcelain released/
+            exit 1
+          fi
+
+      # package-offerings must be an exact manifest of the bundle, and it is frozen once
+      # installed, so a mismatch has to fail before a tag is ever pushed.
+      - name: Offerings match the bundle
+        run: make check
+
       - name: Template tests
         run: make test
