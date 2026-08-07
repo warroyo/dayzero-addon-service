@@ -11,12 +11,12 @@ CATALOG_TAG   := stable
 # An immutable snapshot tag for the same bundle, plus the Supervisor Service package
 # version. Nothing registered points here: it exists so a given publish can be identified,
 # re-fetched or pinned by hand later. Not a package version. A `v*` git tag sets it.
-REPO_VERSION  ?= 1.1.0
+REPO_VERSION  ?= 1.2.0
 
 # Every package version this catalog serves, oldest first. The catalog carries all of
 # them at once, so a consumer moving a releaseFilter pin between two of them needs no
 # Supervisor access, and older versions stay available to roll back to.
-PKG_VERSIONS  := 1.0.1 1.0.2
+PKG_VERSIONS  := 1.0.1 1.0.2 1.0.3
 
 # Released package YAML, frozen at the version it was published as. See released/README.md.
 RELEASED      := released/dayzero-addon-repo

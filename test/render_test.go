@@ -102,32 +102,63 @@ func withSchemaDefaults(values map[string]any) map[string]any {
 	return out
 }
 
-// renderTemplate evaluates one output's Go template with the context roots the addon
-// controller provides.
-func renderTemplate(t *testing.T, tmpl string, values, deps map[string]any) string {
-	t.Helper()
+const (
+	testClusterName = "dev1-cluster"
+	testClusterUID  = "9e1c0d3a-7f42-4b18-96ad-2c5be0f4d871"
+)
+
+// withClusterCR adds the required clusterCR dependency, so cases render against the shape
+// the controller actually passes: .Dependencies non-empty even when the optional ConfigMap
+// is absent, which is what the hasKey guards exist for.
+func withClusterCR(deps map[string]any) map[string]any {
+	out := map[string]any{
+		"clusterCR": map[string]any{
+			"metadata": map[string]any{
+				"name": testClusterName,
+				"uid":  testClusterUID,
+			},
+		},
+	}
+	maps.Copy(out, deps)
+	return out
+}
+
+// executeTemplate evaluates one output's Go template with the context roots the addon
+// controller provides, returning any error rather than failing the test. Tests that
+// assert the template *refuses* to render need the error.
+func executeTemplate(tmpl string, values, deps map[string]any) (string, error) {
 	parsed, err := template.New("out").Option("missingkey=error").Funcs(controllerFuncs()).Parse(tmpl)
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		return "", err
 	}
 	ctx := map[string]any{
 		"Values":       withSchemaDefaults(values),
 		"Dependencies": deps,
-		"Cluster":      map[string]any{"name": "dev1-cluster"},
+		"Cluster":      map[string]any{"name": testClusterName},
 		"Addon":        map[string]any{"name": "dayzero"},
 	}
 	var out bytes.Buffer
 	if err := parsed.Execute(&out, ctx); err != nil {
-		t.Fatalf("execute: %v", err)
+		return "", err
 	}
-	return out.String()
+	return out.String(), nil
+}
+
+// renderTemplate is executeTemplate for the cases that expect success.
+func renderTemplate(t *testing.T, tmpl string, values, deps map[string]any) string {
+	t.Helper()
+	out, err := executeTemplate(tmpl, values, deps)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	return out
 }
 
 // valuesSecret returns the values.yaml the ACD emits into its output Secret for a given
 // payload. This is what the addon controller wires into the guest PackageInstall.
 func valuesSecret(t *testing.T, a acd, values, deps map[string]any) string {
 	t.Helper()
-	out := renderTemplate(t, a.Spec.TemplateOutputResources[0].Template, values, deps)
+	out := renderTemplate(t, a.Spec.TemplateOutputResources[0].Template, values, withClusterCR(deps))
 
 	var secret struct {
 		StringData map[string]string `yaml:"stringData"`
@@ -175,7 +206,7 @@ func TestOutputsAreBodyOnly(t *testing.T) {
 		t.Fatal("ACD has no templateOutputResources")
 	}
 	for _, o := range a.Spec.TemplateOutputResources {
-		out := renderTemplate(t, o.Template, map[string]any{}, nil)
+		out := renderTemplate(t, o.Template, map[string]any{}, withClusterCR(nil))
 		var body map[string]any
 		if err := yaml.Unmarshal([]byte(out), &body); err != nil {
 			t.Errorf("%s: template does not render to valid YAML: %v\n---\n%s", o.target().Kind, err, out)
@@ -189,22 +220,29 @@ func TestOutputsAreBodyOnly(t *testing.T) {
 	}
 }
 
-// TestOutputsAreValuesSecrets pins the wiring: the addon controller marshals the ACD
-// output Secret into the guest PackageInstall's values, so both outputs must be Secrets
-// and at least one must be a ValuesRef.
-func TestOutputsAreValuesSecrets(t *testing.T) {
+// TestOutputIsOneGuestValuesSecret pins the wiring. The guest PackageInstall resolves
+// secretRef in its own namespace, so the one output that matters is the Secret delivered
+// into the guest package namespace -- that alone is what feeds the render, as the 85
+// shipped addons that declare no supervisorNamespaceOutput at all demonstrate.
+//
+// A second, supervisor-side copy of the same Secret was carried until 1.0.3. It produced
+// a duplicate entry in the PackageInstall's values pointing at this same guest Secret,
+// and nothing read its contents. Adding one back would reintroduce two bodies that have
+// to be kept identical by hand.
+func TestOutputIsOneGuestValuesSecret(t *testing.T) {
 	a := renderACD(t)
-	valuesRef := false
-	for _, o := range a.Spec.TemplateOutputResources {
-		if o.target().Kind != "Secret" {
-			t.Errorf("output is a %q, but the package is fed by a values Secret", o.target().Kind)
-		}
-		if o.target().ReferenceType == "ValuesRef" {
-			valuesRef = true
-		}
+	if len(a.Spec.TemplateOutputResources) != 1 {
+		t.Fatalf("expected exactly 1 output, got %d", len(a.Spec.TemplateOutputResources))
 	}
-	if !valuesRef {
-		t.Error("no output Secret is a ValuesRef; nothing wires the payload into the PackageInstall")
+	o := a.Spec.TemplateOutputResources[0]
+	if o.TargetClusterOutput == nil {
+		t.Fatal("the output is not a targetClusterOutput; nothing lands in the guest")
+	}
+	if got := o.target().Kind; got != "Secret" {
+		t.Errorf("output is a %q, but the package is fed by a values Secret", got)
+	}
+	if got := o.target().Namespace; got != "vmware-system-tkg" {
+		t.Errorf("output namespace is %q, want the guest package namespace", got)
 	}
 }
 
@@ -344,6 +382,158 @@ func TestResourcesJsonIsValid(t *testing.T) {
 	if len(arr) != 1 {
 		t.Errorf("decoded %d resources, want 1", len(arr))
 	}
+}
+
+// TestTokenSubstitution covers the identity tokens across every payload source. The
+// ConfigMap case is the load-bearing one: it is the only case that fails if substitution
+// runs before the ConfigMap concatenation.
+func TestTokenSubstitution(t *testing.T) {
+	a := renderACD(t)
+	wantAudience := testClusterName + "-" + testClusterUID
+
+	authenticator := func(source string) string {
+		return "apiVersion: authentication.concierge.pinniped.dev/v1alpha1\n" +
+			"kind: JWTAuthenticator\n" +
+			"metadata:\n" +
+			"  name: " + source + "\n" +
+			"spec:\n" +
+			"  audience: ${CLUSTER_NAME}-${CLUSTER_UID}\n"
+	}
+
+	cases := []struct {
+		name   string
+		values map[string]any
+		deps   map[string]any
+	}{
+		{
+			name: "structured payload",
+			values: map[string]any{"resources": []any{
+				map[string]any{
+					"apiVersion": "authentication.concierge.pinniped.dev/v1alpha1",
+					"kind":       "JWTAuthenticator",
+					"metadata":   map[string]any{"name": "structured"},
+					"spec":       map[string]any{"audience": "${CLUSTER_NAME}-${CLUSTER_UID}"},
+				},
+			}},
+		},
+		{
+			name:   "raw yaml payload",
+			values: map[string]any{"resourcesYaml": authenticator("raw")},
+		},
+		{
+			name: "configmap payload",
+			deps: map[string]any{"dayzeroConfigMap": map[string]any{
+				"data": map[string]any{"auth.yaml": authenticator("configmap")},
+			}},
+		},
+		{
+			name: "all sources at once",
+			values: map[string]any{
+				"resourcesYaml": authenticator("raw"),
+				"resources": []any{map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "${CLUSTER_NAME}-seed"},
+				}},
+			},
+			deps: map[string]any{"dayzeroConfigMap": map[string]any{
+				"data": map[string]any{"auth.yaml": authenticator("configmap")},
+			}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vals := valuesSecret(t, a, tc.values, tc.deps)
+			if strings.Contains(vals, "${CLUSTER_") {
+				t.Fatalf("values Secret still carries an unexpanded token:\n%s", vals)
+			}
+			docs := packageRender(t, vals)
+			if len(docs) == 0 {
+				t.Fatal("payload rendered no resources")
+			}
+			for _, d := range docs {
+				spec, ok := d["spec"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if got := spec["audience"]; got != wantAudience {
+					t.Errorf("audience = %v, want %q", got, wantAudience)
+				}
+			}
+		})
+	}
+}
+
+// TestNoTokensRenderUnchanged is the regression guard for every existing consumer: a
+// payload with no tokens must come out exactly as it went in.
+func TestNoTokensRenderUnchanged(t *testing.T) {
+	a := renderACD(t)
+
+	raw := "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n"
+	structured := []any{map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": "seed", "namespace": "default"},
+		"data":       map[string]any{"note": "a literal $ and a {braced} thing"},
+	}}
+
+	vals := valuesSecret(t, a, map[string]any{"resources": structured, "resourcesYaml": raw}, nil)
+	docs := packageRender(t, vals)
+
+	got := map[string]bool{}
+	for _, d := range docs {
+		kind, _ := d["kind"].(string)
+		meta, _ := d["metadata"].(map[string]any)
+		name, _ := meta["name"].(string)
+		got[kind+"/"+name] = true
+	}
+	for _, want := range []string{"Namespace/team-a", "ConfigMap/seed"} {
+		if !got[want] {
+			t.Errorf("token-free payload did not round-trip to %q; rendered %v", want, keys(got))
+		}
+	}
+	for _, d := range docs {
+		if data, ok := d["data"].(map[string]any); ok {
+			if data["note"] != "a literal $ and a {braced} thing" {
+				t.Errorf("token-free content was altered: %v", data["note"])
+			}
+		}
+	}
+}
+
+// TestUnresolvedClusterUIDFails covers the fail-closed guard: it must fire from either
+// payload string, and must not fire for payloads that never asked for a UID.
+func TestUnresolvedClusterUIDFails(t *testing.T) {
+	a := renderACD(t)
+	tmpl := a.Spec.TemplateOutputResources[0].Template
+
+	t.Run("raw yaml asks for the uid", func(t *testing.T) {
+		_, err := executeTemplate(tmpl, map[string]any{"resourcesYaml": "audience: ${CLUSTER_UID}\n"}, nil)
+		if err == nil {
+			t.Fatal("template rendered an empty UID instead of failing")
+		}
+		if !strings.Contains(err.Error(), "did not resolve") {
+			t.Errorf("error does not name the cause: %v", err)
+		}
+	})
+
+	t.Run("structured payload asks for the uid", func(t *testing.T) {
+		values := map[string]any{"resources": []any{
+			map[string]any{"spec": map[string]any{"audience": "${CLUSTER_UID}"}},
+		}}
+		if _, err := executeTemplate(tmpl, values, nil); err == nil {
+			t.Fatal("template rendered an empty UID instead of failing")
+		}
+	})
+
+	t.Run("no token, no clusterCR, still renders", func(t *testing.T) {
+		// The shape of every payload predating this feature.
+		values := map[string]any{"resourcesYaml": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: team-a\n"}
+		if _, err := executeTemplate(tmpl, values, nil); err != nil {
+			t.Fatalf("token-free payload was rejected: %v", err)
+		}
+	})
 }
 
 func keys(m map[string]bool) []string {

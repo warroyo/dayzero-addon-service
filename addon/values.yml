@@ -6,7 +6,7 @@
 addon_name: "dayzero"
 
 #! Addon / package version.
-addon_version: "1.0.1"
+addon_version: "1.0.3"
 
 #! Guest cluster Kubernetes versions this addon supports. Plain semver range, matching
 #! the format used by the shipped VKS addons (e.g. ">=1.35.0 <1.36.0").

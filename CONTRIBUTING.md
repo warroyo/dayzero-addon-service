@@ -35,7 +35,8 @@ dayzero-addon-service/
 │       └── render.yml
 ├── released/dayzero-addon-repo/   # frozen Package YAML, one file per released version
 │   ├── 1.0.1.yml
-│   └── 1.0.2.yml
+│   ├── 1.0.2.yml
+│   └── 1.0.3.yml
 ├── repo/
 │   └── pkgrepo-build.yml.tpl      # PackageRepositoryBuild for `kctrl package repository release`
 ├── install/
