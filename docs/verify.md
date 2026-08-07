@@ -120,22 +120,30 @@ kubectl -n <cluster-ns> get clusteraddon <cluster>-dayzero -o yaml
 ```
 
 Template rendering failures surface here, in the conditions. This is the primary debugging
-surface for the ACD. Confirm the values Secret was produced:
+surface for the ACD.
 
-```sh
-kubectl -n <cluster-ns> get secret <cluster>-dayzero-data-values -o jsonpath='{.data.values\.yaml}' | base64 -d
-```
-
-It should carry `resourcesJson` and `resourcesYaml`.
+The values Secret itself is delivered into the guest, not the Supervisor namespace, so
+decode it there — see step 6. Before 1.0.3 a second copy was also written alongside the
+`ClusterAddon`; if you are checking an older version, that is what
+`kubectl -n <cluster-ns> get secret <cluster>-dayzero-data-values` returns.
 
 ## Step 6: confirm in the guest cluster
 
 ```sh
 kubectl -n vmware-system-tkg get pkgi <cluster>-dayzero -o yaml   # status.usefulErrorMessage on failure
+kubectl -n vmware-system-tkg get secret <cluster>-dayzero-data-values \
+  -o jsonpath='{.data.values\.yaml}' | base64 -d                  # should carry resourcesJson + resourcesYaml
 kubectl -n default get configmap <payload>
 ```
 
 The `PackageInstall` should reconcile, and the payload resources should be present.
+
+Its `spec.values` should list the Secret exactly **once**. Two entries naming the same
+Secret means a `supervisorNamespaceOutput` has come back:
+
+```sh
+kubectl -n vmware-system-tkg get pkgi <cluster>-dayzero -o jsonpath='{.spec.values}'
+```
 
 ## Step 7: the payload sources and lifecycle
 
@@ -147,6 +155,49 @@ The `PackageInstall` should reconcile, and the payload resources should be prese
   `stopMatchingBehavior: Retain`.
 - Confirm the `AddonConfig` is garbage collected with the `ClusterAddon`, which the
   `owned-for-deletion` annotation buys.
+
+## Step 7a: cluster identity tokens (1.0.3 and later)
+
+Pin `releaseFilter.ref.name` to the version under test, then work through all four cases —
+the last two are the ones that fail quietly if the ACD template is wrong.
+
+1. **Inline.** A payload with `${CLUSTER_NAME}-${CLUSTER_UID}` in `values.resourcesYaml`
+   (see [`examples/addonconfig-jwtauthenticator.yml`](../examples/addonconfig-jwtauthenticator.yml)).
+   Confirm the object lands in the guest with both expanded, cross-checked against the
+   cluster's real UID:
+   ```sh
+   kubectl -n <cluster-ns> get cluster <cluster> -o jsonpath='{.metadata.uid}'
+   ```
+2. **Structured.** The same tokens inside `values.resources`, which travels through the
+   JSON encoding rather than the raw string.
+3. **From the ConfigMap.** Put a token in a `<cluster>-dayzero` ConfigMap value. This is
+   the case that breaks if substitution runs before the ConfigMap is concatenated, and it
+   cannot be caught by any inline payload.
+4. **No ConfigMap at all, no tokens.** The plain case, which is what every payload written
+   before 1.0.3 looks like. It exercises the second `templateInputResource` being present
+   while the optional one is absent — the shape that a bare `.Dependencies.dayzeroConfigMap`
+   guard would fail on.
+
+Then the refusal path: a payload using `${CLUSTER_UID}` on a cluster whose `Cluster` object
+cannot be resolved must fail to render rather than expand the token to empty. The error
+appears in the `ClusterAddon` conditions and names the cause:
+
+```sh
+kubectl -n <cluster-ns> get clusteraddon <cluster>-dayzero -o yaml
+```
+
+Regression, worth doing once per release: apply a token-free payload and confirm the guest
+output is unchanged from the previous version. This should hold by construction — the
+inlined render files are byte-identical across 1.0.2 and 1.0.3 — but confirm it rather than
+assume it:
+
+```sh
+python3 - <<'EOF'
+import yaml
+f=lambda p: yaml.safe_load(open(p))['spec']['template']['spec']['fetch'][0]['inline']['paths']
+print(f('released/dayzero-addon-repo/1.0.2.yml') == f('released/dayzero-addon-repo/1.0.3.yml'))
+EOF
+```
 
 ## Step 8: the real test
 
@@ -167,5 +218,7 @@ proves the tenant never needs a kubeconfig.
 | ACD present but schema is `helmValues`/`helmOptions` | A helm AddonRepository was installed by mistake; this project ships an imgpkg one |
 | ClusterAddon stuck, template error | `kubectl -n <cluster-ns> get clusteraddon -o yaml`, then the conditions |
 | values Secret is empty or malformed | The ACD output template. Context roots are `.Values`, `.Dependencies`, `.Cluster`, `.Addon` (capital V) |
-| PackageInstall fails to render | The package ytt got malformed values. Decode the values Secret (step 5) and check `resourcesJson` is valid JSON |
+| PackageInstall fails to render | The package ytt got malformed values. Decode the values Secret in the guest (step 6) and check `resourcesJson` is valid JSON |
 | Nothing applied, no error | An empty payload renders to zero resources by design; confirm the AddonConfig actually carries a payload |
+| ClusterAddon condition says "payload uses ${CLUSTER_UID} but the cluster UID did not resolve" | The `clusterCR` input did not resolve. Working as intended — it refuses rather than shipping an empty UID. Check the `Cluster` object exists in the Supervisor namespace and that the addon is 1.0.3 or later |
+| A `${CLUSTER_...}` token reached the guest unexpanded | Either the addon is older than 1.0.3, or the spelling is off. Only `${CLUSTER_NAME}` and `${CLUSTER_UID}` expand; near-miss forms are passed through deliberately |

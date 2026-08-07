@@ -1,0 +1,31 @@
+# Cluster identity tokens, expanded per cluster as the payload is delivered. Requires
+# dayzero 1.0.3 or later; see the README for the token list and their exact spelling.
+#
+# The name MUST be "<cluster-name>-<addon-name>" and the object MUST live in the
+# cluster's own Supervisor namespace.
+apiVersion: addons.kubernetes.vmware.com/v1alpha1
+kind: AddonConfig
+metadata:
+  name: my-cluster-dayzero
+  namespace: my-namespace
+  labels:
+    app.kubernetes.io/name: dayzero
+  annotations:
+    # Without this the AddonConfig survives deletion of the ClusterAddon.
+    clusteraddon.addons.kubernetes.vmware.com/owned-for-deletion: "true"
+spec:
+  clusterName: my-cluster
+  values:
+    resourcesYaml: |
+      apiVersion: authentication.concierge.pinniped.dev/v1alpha1
+      kind: JWTAuthenticator
+      metadata:
+        name: vcfa
+      spec:
+        # Expands to e.g. "my-cluster-9e1c0d3a-7f42-4b18-96ad-2c5be0f4d871". If auth is
+        # rejected, compare against:
+        #   kubectl -n my-namespace get cluster my-cluster -o jsonpath='{.metadata.uid}'
+        audience: ${CLUSTER_NAME}-${CLUSTER_UID}
+        issuer: https://vcfa.example.com/oidc
+        tls:
+          certificateAuthorityData: <base64 CA bundle>

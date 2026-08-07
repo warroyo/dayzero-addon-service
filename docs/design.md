@@ -60,11 +60,28 @@ The tenant payload flows as data, in three hops:
    wires that Secret into the guest `PackageInstall` as its values.
 3. The package's ytt reads the values and emits the resources; kapp applies them.
 
-The Secret is the standard mechanism: the shipped cilium ACD emits a
-`<cluster>-cilium-data-values` Secret the same way, with `referenceType: ValuesRef` on
-the Supervisor side and a plain copy in the guest package namespace. This project mirrors
-that shape exactly, since the ACD-to-PackageInstall wiring is addon-controller internals
-that can only be fully exercised on a real install.
+The Secret is the standard mechanism. One output resource does it: a `targetClusterOutput`
+Secret in the guest package namespace, which is where the guest `PackageInstall` resolves
+`secretRef`.
+
+Through 1.0.2 there were two outputs, copying the cilium ACD, which pairs a
+`supervisorNamespaceOutput` carrying `referenceType: ValuesRef` with a plain copy in the
+guest. 1.0.3 drops the Supervisor half. Surveying the shipped ACDs on a live Supervisor
+showed cilium's shape is the rare one: **85 of them declare only a `targetClusterOutput`**
+and their payloads are wired correctly regardless. The redundancy was visible in the guest,
+where dayzero was the only addon whose `PackageInstall` listed its values Secret twice:
+
+```
+dev1-cluster-ako       values=1 ['dev1-cluster-ako-data-values']
+dev1-cluster-istio     values=1 ['dev1-cluster-istio-values']
+dev1-cluster-dayzero   values=2 ['dev1-cluster-dayzero-data-values',
+                                 'dev1-cluster-dayzero-data-values']
+```
+
+Both entries resolved to the same guest-local Secret, so the Supervisor copy's contents
+were never read — it was a debugging convenience that cost a second copy of the output
+template, kept identical to the first by hand. Dropping it also made the addon's write
+access to secrets in the tenant namespace unnecessary; see the RBAC section.
 
 ### Encoding the payload
 
@@ -95,12 +112,65 @@ package's ytt turn its contents back into arbitrary resources in the guest.
 plus sprig, plus the Helm-style `toYaml`) so template bugs surface locally instead of on a
 Supervisor.
 
+## The one exception: cluster identity tokens
+
+Since 1.0.3 the payload is not quite opaque. Two literal tokens, `${CLUSTER_NAME}` and
+`${CLUSTER_UID}`, are expanded as the payload is encoded. The need is real and narrow: a
+Pinniped `JWTAuthenticator` audience must contain a UID Kubernetes assigns at cluster
+creation, so it cannot be authored in git, and creating it imperatively is the thing this
+addon exists to avoid.
+
+Three choices are worth recording, because each had a plausible alternative.
+
+**Substitution happens in the ACD template, not in the guest render.** The dialect has no
+`tpl` function, so a payload string cannot be re-templated — it can only be rewritten as
+text before it is encoded. Doing it there rather than in the package's ytt means no new
+data value crosses into the guest, so `addon/render/` is untouched and 1.0.3's inlined
+render files are byte-identical to 1.0.2's. A token-free payload therefore renders
+identically to the previous version by construction rather than by test.
+
+**The `Cluster` object is a `templateInputResource`, not a context root.** `.Cluster`
+carries only `name` and `namespace`, which is why all 26 shipped ACDs that need cluster
+state declare the CR as a dependency instead. It is declared **required**, matching every
+one of them: an unresolvable `Cluster` should stop the `ClusterAddon` rather than expand
+`${CLUSTER_UID}` to empty and ship a subtly wrong payload.
+
+**The guard is an exact-string test and nothing cleverer.** If a payload asks for a UID
+that did not resolve, the template calls `fail` and the error names the cause in the
+`ClusterAddon` conditions. It deliberately does not try to catch near-miss spellings like
+`${CLUSTERUID}`: the ACD ships frozen inside its package version, so a heuristic that
+produced a false positive would reproduce on every cluster and could only be fixed by
+publishing another version. A precise check that misses typos is worth more than a fuzzy
+one that cannot be corrected.
+
+Known limits, all accepted: expansion covers tenant-supplied ConfigMap content as well as
+operator-authored values; substitution into `resourcesJson` writes into a JSON string
+literal, so a future token whose value could contain `"` or `\` would corrupt it (an RFC
+1123 label and a UUID cannot); and there is no way to emit a literal `${CLUSTER_NAME}`.
+
+Alternatives rejected: a typed field-path injection primitive, which would be structurally
+safer but is a permanent path-interpreter for one field on one resource; a different
+identity source such as the guest's `kube-system` namespace UID, which VCFA does not accept
+as a relying party; and a guest-side ytt overlay carried in the payload, which cannot work
+because `render.yml` `yaml.decode`s payload documents and overlay annotations are comments.
+
 ## What this ACD asks for in RBAC
 
-`spec.addonInstallPermission.accessPolicies` declares `get`/`list`/`watch` on configmaps
-(the optional payload ConfigMap) and full access to secrets (the output values Secret),
-matching the shipped cilium ACD. Those rights are in the cluster's Supervisor namespace,
-not the guest.
+`spec.addonInstallPermission.accessPolicies` declares `get`/`list`/`watch` on configmaps —
+the optional payload ConfigMap — and nothing else. Those rights are in the cluster's
+Supervisor namespace, not the guest.
+
+Through 1.0.2 it also granted full access to secrets, following cilium. That existed only
+to write the Supervisor-side copy of the values Secret; with that output gone in 1.0.3 the
+addon writes nothing into the tenant namespace, and the grant went with it. All 85 shipped
+ACDs that declare only a `targetClusterOutput` likewise grant no secret write.
+
+The `clusterCR` input added in 1.0.3 has no matching rule, which looks like an oversight
+and is not. Checked against a live Supervisor: of the 26 shipped ACDs that declare a
+`Cluster` `templateInputResource`, **none** grants a `cluster.x-k8s.io` rule — cilium
+grants secrets only and still dereferences `.Dependencies.ClusterCR.spec.*` on a healthy
+cluster. `accessPolicies` does not gate input resolution; the controller resolves inputs
+with its own identity. Granting rights the addon does not need would be the worse default.
 
 The payload lands in the guest under the addon system's own `PackageInstall` identity,
 which this project does not control and cannot scope down. That is the one knob the

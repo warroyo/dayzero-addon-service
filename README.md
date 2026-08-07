@@ -28,10 +28,10 @@ flowchart LR
     MAT["Addon, AddonRelease, ACD<br/><i>in vmware-system-vks-public</i>"]
     AINST["tenant: AddonInstall"]
     ACFG["AddonConfig<br/>spec.values"]
-    SECRET["values Secret"]
   end
 
   subgraph guest["Workload cluster"]
+    SECRET["values Secret"]
     PI["PackageInstall"]
     RENDER["ytt renders your YAML,<br/>kapp applies"]
   end
@@ -49,7 +49,7 @@ flowchart LR
   classDef guestc fill:#e8f5e9,stroke:#2e7d32,color:#111
   class MAT locked
   class AINST,ACFG tenantc
-  class PI,RENDER guestc
+  class SECRET,PI,RENDER guestc
 ```
 
 Whatever a tenant writes in `AddonConfig.spec.values` is rendered into a values Secret.
@@ -149,6 +149,38 @@ A `<cluster-name>-dayzero` ConfigMap in the same namespace gets merged in too, w
 when a separate pipeline manages the payload
 ([example](examples/addonconfig-configmap.yml)).
 
+### Cluster identity tokens
+
+Some resources need a value only the running cluster can supply. A payload may use two
+literal tokens, expanded per cluster as it is delivered:
+
+| Token | Expands to |
+|---|---|
+| `${CLUSTER_NAME}` | the cluster's name |
+| `${CLUSTER_UID}` | the cluster's `metadata.uid`, assigned by Kubernetes at creation |
+
+The motivating case is a Pinniped `JWTAuthenticator`, whose audience has to carry a UID
+that cannot exist when the manifest is written
+([example](examples/addonconfig-jwtauthenticator.yml)):
+
+```yaml
+spec:
+  audience: ${CLUSTER_NAME}-${CLUSTER_UID}
+```
+
+Worth knowing:
+
+- **Opt in by using them.** A payload with no tokens is delivered untouched, exactly as it
+  was before this existed. There is no flag to set.
+- **All three payload sources expand**, the ConfigMap included. Anything a tenant can put
+  in the payload is subject to expansion.
+- **Spelling is exact.** `${CLUSTER_UID}` expands; `$CLUSTER_UID` and `${CLUSTERUID}` are
+  delivered as written. There is no near-miss detection, deliberately — see
+  [`docs/design.md`](docs/design.md).
+- **No escape hatch.** A payload that wants a literal `${CLUSTER_NAME}` in the delivered
+  output cannot have one.
+- **Requires 1.0.3 or later.** On an earlier version the tokens are inert text.
+
 ### Security posture
 
 The payload is applied by the addon system's own privileged identity, so treat write
@@ -178,4 +210,4 @@ Build, test and release mechanics are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Repo layout, build mechanics, releasing |
 | [`docs/design.md`](docs/design.md) | Why this addon is built the way it is, and what was rejected |
 | [`docs/verify.md`](docs/verify.md) | End-to-end verification runbook |
-| [`examples/`](examples/) | Tenant `AddonInstall` and `AddonConfig`, one per payload source |
+| [`examples/`](examples/) | Tenant `AddonInstall` and `AddonConfig`, one per payload source, plus cluster identity tokens |

@@ -16,8 +16,9 @@ metadata:
     addon.kubernetes.vmware.com/addon-name: #@ data.values.addon_name
     addon.kubernetes.vmware.com/addon-namespace: vmware-system-vks-public
 spec:
-  #! Read the optional payload ConfigMap and write the values Secret. Supervisor-side
-  #! rights only, not guest-cluster rights.
+  #! Read the optional payload ConfigMap. Supervisor-side rights only, not guest-cluster
+  #! rights. The clusterCR input needs no rule here, and neither does the output Secret,
+  #! which is written into the guest -- see docs/design.md.
   addonInstallPermission:
     accessPolicies:
     - order: 0
@@ -25,9 +26,6 @@ spec:
       - apiGroups: [""]
         resources: ["configmaps"]
         verbs: ["get", "list", "watch"]
-      - apiGroups: [""]
-        resources: ["secrets"]
-        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   schema:
     openAPIV3Schema:
@@ -59,27 +57,19 @@ spec:
     constraints:
     - operator: optional
 
-  templateOutputResources:
-  #! 1 - the values Secret on the Supervisor, wired as the guest PackageInstall's values
-  #! (referenceType ValuesRef). The package's ytt reads these and emits the resources.
-  - supervisorNamespaceOutput:
-      apiVersion: v1
-      kind: Secret
-      name: #@ values_secret
-      referenceType: ValuesRef
-    template: |
-      {{- $rawYaml := .Values.resourcesYaml | default "" -}}
-      {{- if .Dependencies }}{{- if .Dependencies.dayzeroConfigMap }}{{- range $k, $v := .Dependencies.dayzeroConfigMap.data }}
-      {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
-      {{- end }}{{- end }}{{- end }}
-      stringData:
-        values.yaml: |
-          resourcesJson: {{ .Values.resources | default list | toJson | toJson }}
-          resourcesYaml: {{ $rawYaml | toJson }}
-      type: Opaque
+  #! Required: supplies the ${CLUSTER_UID} token, which .Cluster cannot. See docs/design.md.
+  - inputName: clusterCR
+    apiVersion: cluster.x-k8s.io/v1beta2
+    kind: Cluster
+    name: '{{.Cluster.name}}'
+    scope: Namespace
 
-  #! 2 - the same values Secret inside the guest package namespace, so the guest
-  #! PackageInstall can consume it. Same body, no referenceType.
+  #! One output: the values Secret in the guest package namespace, which the guest
+  #! PackageInstall consumes. The package's ytt reads these and emits the resources.
+  #!
+  #! Token expansion must stay after the ConfigMap concatenation; docs/design.md explains
+  #! why, and why the unresolved-UID guard is an exact-string test and nothing cleverer.
+  templateOutputResources:
   - targetClusterOutput:
       apiVersion: v1
       kind: Secret
@@ -87,11 +77,18 @@ spec:
       namespace: #@ data.values.guest_package_namespace
     template: |
       {{- $rawYaml := .Values.resourcesYaml | default "" -}}
-      {{- if .Dependencies }}{{- if .Dependencies.dayzeroConfigMap }}{{- range $k, $v := .Dependencies.dayzeroConfigMap.data }}
+      {{- if and .Dependencies (hasKey .Dependencies "dayzeroConfigMap") }}{{- range $k, $v := .Dependencies.dayzeroConfigMap.data }}
       {{- $rawYaml = printf "%s\n---\n%s" $rawYaml $v }}
-      {{- end }}{{- end }}{{- end }}
+      {{- end }}{{- end }}
+      {{- $uid := "" -}}
+      {{- if and .Dependencies (hasKey .Dependencies "clusterCR") }}{{- $uid = printf "%v" .Dependencies.clusterCR.metadata.uid -}}{{- end }}
+      {{- $json := .Values.resources | default list | toJson -}}
+      {{- if and (eq $uid "") (or (contains "${CLUSTER_UID}" $rawYaml) (contains "${CLUSTER_UID}" $json)) }}
+      {{- fail "dayzero: payload uses ${CLUSTER_UID} but the cluster UID did not resolve" }}
+      {{- end }}
+      {{- $rawYaml = $rawYaml | replace "${CLUSTER_NAME}" .Cluster.name | replace "${CLUSTER_UID}" $uid -}}
       stringData:
         values.yaml: |
-          resourcesJson: {{ .Values.resources | default list | toJson | toJson }}
+          resourcesJson: {{ $json | replace "${CLUSTER_NAME}" .Cluster.name | replace "${CLUSTER_UID}" $uid | toJson }}
           resourcesYaml: {{ $rawYaml | toJson }}
       type: Opaque
